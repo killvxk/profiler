@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- This file specifies the capture settings for the custom events emitted by profiler_p.dll   -->
+<!-- and defined in profiler_r.dll (see the implementation manifest manifest\profiler_etw.man.) -->
+<!-- If you add custom event providers to profiler_etw.man, you'll need to update this file in order to capture the events and then you'll need to remove and re-add it in WPRUI (Windows Performance Recorder.) -->
+<WindowsPerformanceRecorder Version="1.0" Comments="Capture Custom Events from profiler_p.dll" Company="Russell Klenk" Copyright="(c) 2016 Russell Klenk">
+    <Profiles>
+        <!-- The EventCollector block is used to specify the number and size of the buffers
+          to be used when recording ETW data. The Id must match what is specified in the
+          Collectors blocks. The units for Buffer Size are KB. -->
+        <EventCollector Id="Profiler-Collector" Name="Profiler Event Collector">
+            <BufferSize Value="1024" />
+            <Buffers Value="64" PercentageOfTotalMemory="false" />
+        </EventCollector>
+        <!-- A fully specified .wprp file should have four profiles, with DetailLevel set to Verbose and Light and with Logging Mode set to
+          Memory and File. The Light options can be skipped, but then light logging will be disabled when your profile is enabled.
+          The ID must be of the form Name.DetailLevel.LoggingMode. The Description tag is mandatory but is ignored, except for the
+          description of the last Profile which is displayed in wprui. -->
+        <Profile Id="Profiler.Verbose.Memory" Name="Profiler Provider" Description="Profiler Event Collectors" DetailLevel="Verbose" LoggingMode="Memory">
+            <Collectors>
+                <!-- EventCollectorId must match the EventCollector ID specified above -->
+                <!-- EventProvider Id must match the provider name attribute in profiler_etw.man -->
+                <!-- EventProvider Name must match the provider guid attribute in profiler_etw.man, without enclosing {} -->
+                <EventCollectorId Value="Profiler-Collector">
+                    <EventProviders>
+                        <EventProvider Id="Profiler.Task" Name="042CD377-8F6E-4BF0-93DE-B4BA32234771" Stack="true"></EventProvider>
+                    </EventProviders>
+                </EventCollectorId>
+            </Collectors>
+        </Profile>
+        <!-- Redundant Profile definition for Verbose.File - identical to Verbose.Memory in this case. -->
+        <Profile Id="Profiler.Verbose.File" Name="Profiler Provider" Description="Profiler Event Collectors" DetailLevel="Verbose" LoggingMode="File">
+            <Collectors>
+                <!-- EventCollectorId must match the EventCollector ID specified above -->
+                <!-- EventProvider Id must match the provider name attribute in profiler_etw.man -->
+                <!-- EventProvider Name must match the provider guid attribute in profiler_etw.man, without enclosing {} -->
+                <EventCollectorId Value="Profiler-Collector">
+                    <EventProviders>
+                        <EventProvider Id="Profiler.Task" Name="042CD377-8F6E-4BF0-93DE-B4BA32234771" Stack="true"></EventProvider>
+                    </EventProviders>
+                </EventCollectorId>
+            </Collectors>
+        </Profile>
+        <!-- Redundant Profile definition for Light.Memory - identical to Verbose.Memory in this case. -->
+        <Profile Id="Profiler.Light.Memory" Name="Profiler Provider" Description="Profiler Event Collectors" DetailLevel="Light" LoggingMode="Memory">
+            <Collectors>
+                <!-- EventCollectorId must match the EventCollector ID specified above -->
+                <!-- EventProvider Id must match the provider name attribute in profiler_etw.man -->
+                <!-- EventProvider Name must match the provider guid attribute in profiler_etw.man, without enclosing {} -->
+                <EventCollectorId Value="Profiler-Collector">
+                    <EventProviders>
+                        <EventProvider Id="Profiler.Task" Name="042CD377-8F6E-4BF0-93DE-B4BA32234771" Stack="true"></EventProvider>
+                    </EventProviders>
+                </EventCollectorId>
+            </Collectors>
+        </Profile>
+        <!-- Redundant Profile definition for Light.File - identical to Verbose.File in this case. Since this is the last profile the Description field from this Profile is shown in WPRUI. -->
+        <Profile Id="Profiler.Light.File" Name="Profiler Provider" Description="Profiler Event Collectors" DetailLevel="Light" LoggingMode="File">
+            <Collectors>
+                <!-- EventCollectorId must match the EventCollector ID specified above -->
+                <!-- EventProvider Id must match the provider name attribute in profiler_etw.man -->
+                <!-- EventProvider Name must match the provider guid attribute in profiler_etw.man, without enclosing {} -->
+                <EventCollectorId Value="Profiler-Collector">
+                    <EventProviders>
+                        <EventProvider Id="Profiler.Task" Name="042CD377-8F6E-4BF0-93DE-B4BA32234771" Stack="true"></EventProvider>
+                    </EventProviders>
+                </EventCollectorId>
+            </Collectors>
+        </Profile>
+    </Profiles>
+</WindowsPerformanceRecorder>
+
