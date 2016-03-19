@@ -44,23 +44,67 @@ This unregisters, and then re-registers the custom ETW providers with the ETW sy
         <events>
             <provider name="Profiler.Task" guid="{042CD377-8F6E-4BF0-93DE-B4BA32234771}" symbol="TASK_PROFILER" resourceFileName="%TEMP%\profiler_r.dll" messageFileName="%TEMP%\profiler_r.dll">
                 <events>
-                    <event symbol="ThreadID_Event" value="100" task="ThreadID" opcode="Informational" template="T_ThreadID" />
+                    <event symbol="RegisterProfiledProcessEvent" value="100" task="RegisterSchedulerComponents" opcode="RegisterProcess"    template="T_ProcessInfo"        />
+                    <event symbol="RegisterWorkerThreadEvent"    value="101" task="RegisterSchedulerComponents" opcode="RegisterWorker"     template="T_WorkerInfo"         />
+                    <event symbol="RegisterTaskSourceEvent"      value="102" task="RegisterSchedulerComponents" opcode="RegisterTaskSource" template="T_TaskSourceInfo"     />
+                    <event symbol="DefineTaskEvent"              value="103" task="TaskStateTransition"         opcode="Define"             template="T_TaskDefinitionInfo" />
+                    <event symbol="TaskReadyToRunEvent"          value="104" task="TaskStateTransition"         opcode="ReadyToRun"         template="T_TaskReadyToRunInfo" />
+                    <event symbol="TaskLaunchEvent"              value="105" task="TaskStateTransition"         opcode="Launch"             template="T_TaskLaunchInfo"     />
+                    <event symbol="TaskFinishEvent"              value="106" task="TaskStateTransition"         opcode="Finish"             template="T_TaskFinishInfo"     />
                 </events>
                 <tasks>
-                    <task name="ThreadID" symbol="ThreadID_Task" value="1" eventGUID="{1B140FCF-00AF-4AE5-B44E-14850B7BF657}" />
+                    <task name="RegisterSchedulerComponents" symbol="RegisterSchedulerComponentsTask" value="1" eventGUID="{B4C458C7-AD6A-494C-9517-159821F304BE}" />
+                    <task name="TaskStateTransition"         symbol="TaskStateTransitionTask"         value="2" eventGUID="{249C14B6-FEE0-4797-930F-2B08389A3EFD}" />
                 </tasks>
                 <opcodes>
-                    <opcode name="Informational" symbol="Informational_Opcode" value="10" />
+                    <opcode name="RegisterProcess"    symbol="RegisterProcessOpcode"    value="10" />
+                    <opcode name="RegisterWorker"     symbol="RegisterWorkerOpcode"     value="11" />
+                    <opcode name="RegisterTaskSource" symbol="RegisterTaskSourceOpcode" value="12" />
+                    <opcode name="Define"             symbol="DefineTaskOpcode"         value="13" />
+                    <opcode name="ReadyToRun"         symbol="TaskReadyToRunOpcode"     value="14" />
+                    <opcode name="Launch"             symbol="TaskLaunchOpcode"         value="15" />
+                    <opcode name="Finish"             symbol="TaskFinishOpcode"         value="16" />
                 </opcodes>
                 <keywords>
-                    <keyword name="LowFrequency" symbol="LowFrequency_Keyword" mask="0x1" />
-                    <keyword name="NormalFrequency" symbol="NormalFrequency_Keyword" mask="0x2" />
-                    <keyword name="HighFrequency" symbol="HighFrequency_Keyword" mask="0x4" />
+                    <keyword name="SchedulerSetup" symbol="SchedulerSetupKeyword" mask="0x1" />
+                    <keyword name="Scheduler"      symbol="SchedulerKeyword"      mask="0x2" />
                 </keywords>
                 <templates>
-                    <template tid="T_ThreadID">
-                        <data name="ThreadName" inType="win:AnsiString" outType="xs:string" />
-                        <data name="ThreadID" inType="win:UInt32" outType="xs:unsignedInt" />
+                    <template tid="T_ProcessInfo">
+                        <data name="ProcessID"       inType="win:UInt32" outType="win:PID"         />
+                        <data name="ComputePoolSize" inType="win:UInt32" outType="xs:unsignedInt"  />
+                        <data name="GeneralPoolSize" inType="win:UInt32" outType="xs:unsignedInt"  />
+                        <data name="ClockFrequency"  inType="win:UInt64" outType="xs:unsignedLong" />
+                    </template>
+                    <template tid="T_WorkerInfo">
+                        <data name="ThreadID"  inType="win:UInt32" outType="win:TID"        />
+                        <data name="PoolID"    inType="win:UInt32" outType="xs:unsignedInt" />
+                        <data name="PoolIndex" inType="win:UInt32" outType="xs:unsignedInt" />
+                    </template>
+                    <template tid="T_TaskSourceInfo">
+                        <data name="SourceName"  inType="win:AnsiString" outType="xs:string"      />
+                        <data name="ThreadID"    inType="win:UInt32"     outType="win:TID"        />
+                        <data name="SourceIndex" inType="win:UInt32"     outType="xs:unsignedInt" />
+                    </template>
+                    <template tid="T_TaskDefinitionInfo">
+                        <data name="TaskID"      inType="win:UInt32"     outType="win:HexInt32"   />
+                        <data name="ParentID"    inType="win:UInt32"     outType="win:HexInt32"   />
+                        <data name="EntryPoint"  inType="win:Pointer"    outType="win:HexInt64"   />
+                        <data name="SourceIndex" inType="win:UInt32"     outType="xs:unsignedInt" />
+                        <data name="Dependency1" inType="win:UInt32"     outType="win:HexInt32"   />
+                        <data name="Dependency2" inType="win:UInt32"     outType="win:HexInt32"   />
+                        <data name="Dependency3" inType="win:UInt32"     outType="win:HexInt32"   />
+                    </template>
+                    <template tid="T_TaskReadyToRunInfo">
+                        <data name="TaskID" inType="win:UInt32" outType="win:HexInt32" />
+                    </template>
+                    <template tid="T_TaskLaunchInfo">
+                        <data name="TaskID"       inType="win:UInt32" outType="win:HexInt32" />
+                        <data name="WorkerThread" inType="win:UInt32" outType="win:TID"      />
+                    </template>
+                    <template tid="T_TaskFinishInfo">
+                        <data name="TaskID"       inType="win:UInt32" outType="win:HexInt32" />
+                        <data name="WorkerThread" inType="win:UInt32" outType="win:TID"      />
                     </template>
                 </templates>
             </provider>
