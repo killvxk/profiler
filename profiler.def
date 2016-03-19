@@ -1,4 +1,11 @@
 LIBRARY profiler_p
 EXPORTS
-    DoStuff                @1
+    InitializeProfiler      @1
+    ShutdownProfiler        @2
+    RegisterWorkerThread    @3
+    RegisterTaskSource      @4
+    MarkTaskDefinition      @5
+    MarkTaskReadyToRun      @6
+    MarkTaskLaunch          @7
+    MarkTaskFinish          @8
 
