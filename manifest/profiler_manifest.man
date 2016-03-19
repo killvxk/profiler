@@ -71,10 +71,13 @@ This unregisters, and then re-registers the custom ETW providers with the ETW sy
                 </keywords>
                 <templates>
                     <template tid="T_ProcessInfo">
-                        <data name="ProcessID"       inType="win:UInt32" outType="win:PID"         />
-                        <data name="ComputePoolSize" inType="win:UInt32" outType="xs:unsignedInt"  />
-                        <data name="GeneralPoolSize" inType="win:UInt32" outType="xs:unsignedInt"  />
-                        <data name="ClockFrequency"  inType="win:UInt64" outType="xs:unsignedLong" />
+                        <data name="ProcessID"       inType="win:UInt32"     outType="win:PID"         />
+                        <data name="ApplicationName" inType="win:AnsiString" outType="xs:string"       />
+                        <data name="AppMajorVersion" inType="win:UInt32"     outType="xs:unsignedInt"  />
+                        <data name="AppMinorVersion" inType="win:UInt32"     outType="xs:unsignedInt"  />
+                        <data name="ComputePoolSize" inType="win:UInt32"     outType="xs:unsignedInt"  />
+                        <data name="GeneralPoolSize" inType="win:UInt32"     outType="xs:unsignedInt"  />
+                        <data name="ClockFrequency"  inType="win:UInt64"     outType="xs:unsignedLong" />
                     </template>
                     <template tid="T_WorkerInfo">
                         <data name="ThreadID"  inType="win:UInt32" outType="win:TID"        />
@@ -96,7 +99,8 @@ This unregisters, and then re-registers the custom ETW providers with the ETW sy
                         <data name="Dependency3" inType="win:UInt32"     outType="win:HexInt32"   />
                     </template>
                     <template tid="T_TaskReadyToRunInfo">
-                        <data name="TaskID" inType="win:UInt32" outType="win:HexInt32" />
+                        <data name="TaskID"      inType="win:UInt32" outType="win:HexInt32"   />
+                        <data name="SourceIndex" inType="win:UInt32" outType="xs:unsignedInt" />
                     </template>
                     <template tid="T_TaskLaunchInfo">
                         <data name="TaskID"       inType="win:UInt32" outType="win:HexInt32" />
