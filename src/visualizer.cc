@@ -25,11 +25,6 @@
     #define global_variable                    static
 #endif
 
-/// @summary Define the maximum number of saved indentation levels.
-#ifndef MAX_SAVED_INDENT_LEVELS
-    #define MAX_SAVED_INDENT_LEVELS            64
-#endif
-
 /*////////////////
 //   Includes   //
 ////////////////*/
@@ -56,150 +51,16 @@
 /// @summary Defines the data associated with a parsed command line.
 struct COMMAND_LINE
 {
-    int Port;
-};
-
-/// @summary Provides scoped modification of the indentation level for the calling thread.
-struct INDENT_SCOPE
-{
-    size_t Marker;               /// The marker returned by SaveConsoleIndent.
-    INDENT_SCOPE(int indent=-1); /// Save the current indentation level and possibly apply a new level.
-   ~INDENT_SCOPE(void);          /// Restore the indentation level at scope entry.
-    void   Set(int indent);      /// Save the current indentation level and apply a new indentation level.
+    TCHAR *TraceFile;
 };
 
 /*///////////////
 //   Globals   //
 ///////////////*/
-/// @summary The current output indentation level.
-global_variable __declspec(thread) int  GlobalIndent = 0;
-
-/// @summary The zero-based index specifying the current top-of-stack for saved indent levels.
-global_variable __declspec(thread) int  GlobalIndentTOS = 0;
-
-/// @summary A stack used to save and restore the global indentation level.
-global_variable __declspec(thread) int  GlobalIndentStack[MAX_SAVED_INDENT_LEVELS] = {};
-
-/// @summary Helper macro to write a formatted string to stderr. The output will not be visible unless a console window is opened.
-#define ConsoleError(formatstr, ...) \
-    _ftprintf(stderr, _T("%*s") _T(formatstr), (GlobalIndent*2), _T(""), __VA_ARGS__)
-
-/// @summary Helper macro to write a formatting string to stdout. The output will not be visible unless a console window is opened.
-#define ConsoleOutput(formatstr, ...) \
-    _ftprintf(stdout, _T("%*s") _T(formatstr), (GlobalIndent*2), _T(""), __VA_ARGS__)
 
 /*//////////////////////////
 //   Internal Functions   //
 //////////////////////////*/
-/// @summary Retrieves the current indentation level.
-/// @return The current output indentation level for the calling thread.
-internal_function int
-GetConsoleIndent
-(
-    void
-)
-{
-    return GlobalIndent;
-}
-
-/// @summary Sets the current indentation level for the calling thread, without saving the existing value.
-/// @param indent The new indentation level.
-internal_function void
-SetConsoleIndent
-(
-    int indent
-)
-{
-    if (indent >= 0)
-    {   // only allow indentation levels >= 0.
-        GlobalIndent = indent;
-    }
-}
-
-/// @summary Saves the current indentation level for the calling thread, and applies a new indentation level.
-/// @param new_indent The new indentation level, or -1 to keep the current indentation level.
-/// @return The indentation stack marker representing the current level of indentation.
-internal_function size_t
-SaveConsoleIndent
-(
-    int new_indent = -1
-)
-{
-    if (GlobalIndentTOS <  MAX_SAVED_INDENT_LEVELS)
-    {
-        size_t marker = GlobalIndentTOS;
-        GlobalIndentStack[GlobalIndentTOS++] = GlobalIndent;
-        SetConsoleIndent(new_indent);
-        return marker;
-    }
-    return MAX_SAVED_INDENT_LEVELS-1;
-}
-
-/// @summary Restores the indentation level for the calling thread to the current value at the time of the last SaveIndent call.
-internal_function void
-RestoreConsoleIndent
-(
-    void
-)
-{
-    if (GlobalIndentTOS >= 0)
-    {   // restore the saved indentation level.
-        int saved_indent = GlobalIndentStack[GlobalIndentTOS];
-        SetConsoleIndent(saved_indent);
-    }
-    if (GlobalIndentTOS >  0)
-    {   // pop from the stack.
-        GlobalIndentTOS--;
-    }
-}
-
-/// @summary Restores the indentation level for the calling thread to the value at the specified SaveIndent marker.
-/// @param marker The value returned by a previous call to SaveIndent.
-internal_function void
-RestoreConsoleIndent
-(
-    size_t marker
-)
-{
-    int saved_indent = -1;
-    while (GlobalIndentTOS >= marker)
-    {
-        saved_indent =  GlobalIndentStack[GlobalIndentTOS];
-        if (marker > 0) GlobalIndentTOS--;
-    }
-    SetConsoleIndent(saved_indent);
-}
-
-/// @summary Ignore the indentation level for the current thread. The current indentation level is saved; use RestoreIndent to restore it.
-internal_function void
-IgnoreConsoleIndent
-(
-    void
-)
-{
-    SaveConsoleIndent(0);
-}
-
-/// @summary Increase the current indentation level for the calling thread by 1.
-internal_function void
-IncreaseConsoleIndent
-(
-    void
-)
-{
-    SetConsoleIndent(GetConsoleIndent()+1);
-}
-
-/// @summary Decrease the current indentation level for the calling thread by 1.
-internal_function void
-DecreaseConsoleIndent
-(
-    void
-)
-{
-    SetConsoleIndent(GetConsoleIndent()-1);
-}
-
 /// @summary Output a message to the debugger output stream using a printf-style format string.
 /// @param format The format string. See https://msdn.microsoft.com/en-us/library/56e442dc.aspx
 internal_function void
@@ -223,26 +84,6 @@ DebugPrintf
         OutputDebugString(_T("ERROR: DebugPrintf invalid arguments or buffer too small...\n"));
     }
     va_end(arg_list);
-}
-
-/// @summary Save the current indentation level and possibly apply a new indentation level.
-/// @param indent The indentation level to apply, or -1 to leave the current level unchanged.
-inline INDENT_SCOPE::INDENT_SCOPE(int indent /*=-1*/)
-{
-    Marker = SaveConsoleIndent(indent);
-}
-
-/// @summary Restore the saved indentation level when the object goes out of scope.
-inline INDENT_SCOPE::~INDENT_SCOPE(void)
-{
-    RestoreConsoleIndent(Marker);
-}
-
-/// @summary Save the current indentation level and possibly apply a new indentation level.
-/// @param indent The indentation level to apply, or -1 to leave the current level unchanged.
-inline void INDENT_SCOPE::Set(int indent)
-{
-    Marker = SaveConsoleIndent(indent);
 }
 
 /// @summary Compare two command line argument keys for equality. By default, the comparison ignores case differences.
@@ -375,7 +216,7 @@ DefaultCommandLineArguments
 {
     if (args != NULL)
     {   // set the default command-line argument values.
-        args->Port = 0;
+        args->TraceFile = NULL;
         return true;
     }
     return false;
@@ -413,8 +254,9 @@ ParseCommandLine
 
         if (ArgumentKeyAndValue(arg, &key, &val)) // may mutate arg
         {
-            if (KeyMatch(key, _T("p")) || KeyMatch(key, _T("port")))
-            {   // create a console window to view debug output.
+            if (KeyMatch(key, _T("f")) || KeyMatch(key, _T("file")))
+            {   // set the trace file to load.
+                args->TraceFile = val;
             }
             else
             {   // the key is not recognized. output a debug message, but otherwise ignore the error.
@@ -476,6 +318,118 @@ CreateConsoleAndRedirectStdio
     }
 }
 
+/// @summary Implements the WndProc for the main game window.
+/// @param window The window receiving the message.
+/// @param message The message identifier.
+/// @param wparam Additional message-specific data.
+/// @param lparam Additional message-specific data.
+/// @return The message-specific result code.
+internal_function LRESULT CALLBACK
+MainWindowCallback
+(
+    HWND    window, 
+    UINT   message, 
+    WPARAM  wparam, 
+    LPARAM  lparam
+)
+{   // WM_NCCREATE performs special handling to store the WIN32_DISPLAY_THREAD_ARGS pointer in the window data.
+    // the handler for WM_NCCREATE executes before the call to CreateWindowEx returns in CreateWindowOnDisplay.
+    if (message == WM_NCCREATE)
+    {   // store the WIN32_DISPLAY_THREAD_ARGS in the window user data.
+        CREATESTRUCT *cs = (CREATESTRUCT*) lparam;
+        SetWindowLongPtr(window, GWLP_USERDATA, (LONG_PTR) cs->lpCreateParams);
+        return DefWindowProc(window, message, wparam, lparam);
+    }
+
+    // this WndProc may receive several messages before receiving WM_NCCREATE.
+    // if the user data hasn't been set yet, pass through to the default handler.
+    /*WIN32_DISPLAY_THREAD_ARGS *thread_args = (WIN32_DISPLAY_THREAD_ARGS*) GetWindowLongPtr(window, GWLP_USERDATA);
+    if (thread_args == NULL)
+    {   // let the default implementation handle the message.
+        return DefWindowProc(window, message, wparam, lparam);
+    }*/
+
+    // process all other messages sent (or posted) to the window.
+    LRESULT result = 0;
+    switch (message)
+    {
+        case WM_ACTIVATE:
+            {   // wparam is TRUE if the window is being activated, or FALSE if the window is being deactivated. 
+            } break;
+
+        case WM_CLOSE:
+            {   // completely destroy the main window. a WM_DESTROY message is 
+                // posted that in turn causes the WM_QUIT message to be posted.
+                DestroyWindow(window);
+            } break;
+
+        case WM_DESTROY:
+            {   // post the WM_QUIT message to be picked up in the main loop.
+                PostQuitMessage(0);
+            } break;
+
+        default:
+            {   // pass the message to the default handler.
+                result = DefWindowProc(window, message, wparam, lparam);
+            } break;
+    }
+    return result;
+}
+
+/// @summary Create a new window on a given display.
+/// @param this_instance The HINSTANCE of the application (passed to WinMain) or GetModuleHandle(NULL).
+/// @param width The width of the window, or 0 to use the entire width of the display.
+/// @param height The height of the window, or 0 to use the entire height of the display.
+/// @return The handle of the new window, or NULL.
+internal_function HWND
+CreateMainWindow
+(
+    HINSTANCE this_instance,
+    void       *thread_args,
+    int               width=CW_USEDEFAULT, 
+    int              height=CW_USEDEFAULT
+)
+{
+    TCHAR const *class_name = _T("ProfViz_WndClass");
+    WNDCLASSEX     wndclass = {};
+
+    // register the window class, if necessary.
+    if (!GetClassInfoEx(this_instance, class_name, &wndclass))
+    {   // the window class hasn't been registered yet.
+        wndclass.cbSize         = sizeof(WNDCLASSEX);
+        wndclass.cbClsExtra     = 0;
+        wndclass.cbWndExtra     = sizeof(void*);
+        wndclass.hInstance      = this_instance;
+        wndclass.lpszClassName  = class_name;
+        wndclass.lpszMenuName   = NULL;
+        wndclass.lpfnWndProc    = MainWindowCallback;
+        wndclass.hIcon          = LoadIcon  (0, IDI_APPLICATION);
+        wndclass.hIconSm        = LoadIcon  (0, IDI_APPLICATION);
+        wndclass.hCursor        = LoadCursor(0, IDC_ARROW);
+        wndclass.style          = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+        wndclass.hbrBackground  = NULL;
+        if (!RegisterClassEx(&wndclass))
+        {   // unable to register the window class, cannot proceed.
+            return NULL;
+        }
+    }
+
+    // create a new window (not yet visible) at location (0, 0) on the display.
+    int   x        = CW_USEDEFAULT;
+    int   y        = CW_USEDEFAULT;
+    DWORD style_ex = 0;
+    DWORD style    =(WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME) | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    TCHAR*title    =_T("Profile Visualizer");
+    HWND  hwnd     = CreateWindowEx(style_ex, class_name, title, style, x, y, width, height, NULL, NULL, this_instance, thread_args);
+    if   (hwnd  == NULL)
+    {   // the window cannot be created.
+        return NULL;
+    }
+
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    return hwnd;
+}
+
 /*////////////////////////
 //   Public Functions   //
 ////////////////////////*/
@@ -495,6 +449,8 @@ WinMain
 )
 {
     COMMAND_LINE argv;
+    HWND  main_window;
+    bool  keep_running = true;
 
     UNREFERENCED_PARAMETER(this_instance);
     UNREFERENCED_PARAMETER(prev_instance);
@@ -506,7 +462,41 @@ WinMain
         DebugPrintf(_T("ERROR: Unable to parse the command line.\n"));
         return 0;
     }
+    if ((main_window = CreateMainWindow(this_instance, NULL)) == NULL)
+    {   // bail out if the main window cannot be created.
+        DebugPrintf(_T("ERROR: Unable to create the main application window.\n"));
+        return 0;
+    }
     CreateConsoleAndRedirectStdio();
+
+    // run the main thread loop.
+    while (keep_running)
+    {   
+        MSG msg;
+
+        // dispatch windows messages while messages are available.
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            if (msg.message != WM_QUIT)
+            {   // dispatch the message to MainWindowCallback.
+                TranslateMessage(&msg);
+                DispatchMessage (&msg);
+            }
+            else
+            {   // terminate the main loop because the window was closed.
+                keep_running = false;
+                break;
+            }
+        }
+
+        if (!keep_running)
+        {   // the render thread has been instructed to terminate.
+            break;
+        }
+
+        // TODO(rlk): Present the backbuffer
+        Sleep(16);
+    }
     return 0;
 }
 
