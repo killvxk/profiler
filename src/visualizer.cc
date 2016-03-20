@@ -1,5 +1,5 @@
 /*/////////////////////////////////////////////////////////////////////////////
-/// @summary Implement the entry point of the game server application.
+/// @summary Implement the entry point of the profile visualizer application.
 ///////////////////////////////////////////////////////////////////////////80*/
 
 /*////////////////////
@@ -25,10 +25,22 @@
     #define global_variable                    static
 #endif
 
+/// @summary Helper macro to write a formatted string to stderr. The output will not be visible unless a console window is opened.
+#define ConsoleError(formatstr, ...) \
+    _ftprintf(stderr, _T(formatstr), __VA_ARGS__)
+
+/// @summary Helper macro to write a formatting string to stdout. The output will not be visible unless a console window is opened.
+#define ConsoleOutput(formatstr, ...) \
+    _ftprintf(stdout, _T(formatstr), __VA_ARGS__)
+
+/// @summary Include the GUIDs for ETW loggers in the executable.
+#define INITGUID
+
 /*////////////////
 //   Includes   //
 ////////////////*/
 #include <iostream>
+#include <vector>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -39,11 +51,19 @@
 #include <windows.h>
 #include <Shellapi.h>
 
+#include <strsafe.h>
+#include <wmistr.h>
+#include <evntrace.h>
+#include <evntcons.h>
+#include <tdh.h>
+
+#include <process.h>
 #include <conio.h>
 #include <fcntl.h>
 #include <io.h>
 
 #include "profiler.h"
+#include "visualizer_types.h"
 
 /*//////////////////
 //   Data Types   //
@@ -231,7 +251,6 @@ ParseCommandLine
     COMMAND_LINE *args
 )
 {
-    //command_line_args_t cl = {};
     LPTSTR  command_line   = GetCommandLine();
     int     argc           = 1;
 #if defined(_UNICODE) || defined(UNICODE)
@@ -269,8 +288,6 @@ ParseCommandLine
         }
     }
 
-    // finished with command line argument parsing; clean up and return.
-    LocalFree((HLOCAL) argv);
     return true;
 }
 
@@ -316,6 +333,125 @@ CreateConsoleAndRedirectStdio
         // synchronize everything that uses <iostream>.
         std::ios::sync_with_stdio();
     }
+}
+
+/// @summary Retrieve a 32-bit unsigned integer property value from an event record.
+/// @param ev The EVENT_RECORD passed to TaskProfilerRecordEvent.
+/// @param info_buf The TRACE_EVENT_INFO containing event metadata.
+/// @param index The zero-based index of the property to retrieve.
+/// @return The integer value.
+internal_function inline uint32_t
+ProfilerGetUInt32
+(
+    EVENT_RECORD           *ev, 
+    TRACE_EVENT_INFO *info_buf, 
+    size_t               index
+)
+{
+    PROPERTY_DATA_DESCRIPTOR dd;
+    uint32_t  value =  0;
+    dd.PropertyName = (ULONGLONG)((uint8_t*) info_buf + info_buf->EventPropertyInfoArray[index].NameOffset);
+    dd.ArrayIndex   =  ULONG_MAX;
+    dd.Reserved     =  0;
+    TdhGetProperty(ev, 0, NULL, 1, &dd, (ULONG) sizeof(uint32_t), (PBYTE) &value);
+    return value;
+}
+
+/// @summary Retrieve an 8-bit signed integer property value from an event record.
+/// @param ev The EVENT_RECORD passed to TaskProfilerRecordEvent.
+/// @param info_buf The TRACE_EVENT_INFO containing event metadata.
+/// @param index The zero-based index of the property to retrieve.
+/// @return The integer value.
+internal_function inline int8_t
+ProfilerGetSInt8
+(
+    EVENT_RECORD           *ev, 
+    TRACE_EVENT_INFO *info_buf, 
+    size_t               index
+)
+{
+    PROPERTY_DATA_DESCRIPTOR dd;
+    int8_t    value =  0;
+    dd.PropertyName = (ULONGLONG)((uint8_t*) info_buf + info_buf->EventPropertyInfoArray[index].NameOffset);
+    dd.ArrayIndex   =  ULONG_MAX;
+    dd.Reserved     =  0;
+    TdhGetProperty(ev, 0, NULL, 1, &dd, (ULONG) sizeof(int8_t), (PBYTE) &value);
+    return value;
+}
+
+/// @summary Callback invoked for each event reported by Event Tracing for Windows.
+/// @param ev Data associated with the event being reported.
+internal_function void WINAPI
+ProfilerRecordEvent
+(
+    EVENT_RECORD *ev
+)
+{
+    WIN32_PROFILER_EVENTS *profiler = (WIN32_PROFILER_EVENTS*) ev->UserContext;
+    TRACE_EVENT_INFO      *info_buf = (TRACE_EVENT_INFO*) profiler->EventBuffer;
+    ULONG                  size_buf = (ULONG) profiler->EventBufferSize;
+
+    // attempt to parse out the context switch information from the EVENT_RECORD.
+    if (TdhGetEventInformation(ev, 0, NULL, info_buf, &size_buf) == ERROR_SUCCESS)
+    {   // this involves some ridiculous parsing of data in an opaque buffer.
+        // there are some complications with context switch events:
+        // 1. we probably don't know what the 'profiled' process and thread IDs are yet.
+        //    - this means that all of the event info needs to be buffered.
+        // 2. the ProcessId and ThreadId values in the event header are not valid.
+        //    - need to look at Opcode 1,2,3,4 to retrieve thread start/stop information.
+        // 
+        if (IsEqualGUID(info_buf->ProviderGuid, SystemTraceControlGuid) && 
+            IsEqualGUID(info_buf->EventGuid   , KernelThreadEventGuid)  && 
+            info_buf->EventDescriptor.Opcode == 36)
+        {   // opcode 36 corresponds to a CSwitch event.
+            // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa964744%28v=vs.85%29.aspx
+            // all context switch event handling occurs on the same thread.
+            WIN32_CONTEXT_SWITCH              cswitch;
+            cswitch.CurrThreadId            = ProfilerGetUInt32(ev, info_buf,  0); // NewThreadId
+            cswitch.PrevThreadId            = ProfilerGetUInt32(ev, info_buf,  1); // OldThreadId
+            cswitch.WaitTimeMs              = ProfilerGetUInt32(ev, info_buf, 10); // NewThreadWaitTime
+            cswitch.WaitReason              = ProfilerGetSInt8 (ev, info_buf,  6); // OldThreadWaitReason
+            cswitch.WaitMode                = ProfilerGetSInt8 (ev, info_buf,  7); // OldThreadWaitMode
+            cswitch.PrevThreadPriority      = ProfilerGetSInt8 (ev, info_buf,  3); // OldThreadPriority
+            cswitch.CurrThreadPriority      = ProfilerGetSInt8 (ev, info_buf,  2); // NewThreadPriority
+            profiler->CSwitchTime.push_back(uint64_t(ev->EventHeader.TimeStamp.QuadPart));
+            profiler->CSwitchData.push_back(cswitch);
+        }
+    }
+}
+
+/// @summary Implements the entry point of the thread that dispatches ETW context switch events.
+/// @param argp A pointer to the WIN32_TASK_PROFILER to which events will be logged.
+/// @return Zero (unused).
+internal_function unsigned int __stdcall
+EventConsumerThreadMain
+(
+    void *argp
+)
+{   // wait for the go signal from the main thread.
+    // this ensures that state is properly set up.
+    DWORD               wait_result =  WAIT_OBJECT_0;
+    WIN32_PROFILER_EVENTS *profiler = (WIN32_PROFILER_EVENTS*) argp;
+    if ((wait_result = WaitForSingleObject(profiler->ConsumerLaunch, INFINITE)) != WAIT_OBJECT_0)
+    {   // the wait failed for some reason, so terminate early.
+        ConsoleError("ERROR (%S): Event consumer wait for launch failed with result %08X (%08X).\n", __FUNCTION__, wait_result, GetLastError());
+        return 1;
+    }
+
+    // because real-time event capture is being used, the ProcessTrace function 
+    // doesn't return until the capture session is stopped by calling CloseTrace.
+    // ProcessTrace sorts events by timestamp and calls TaskProfilerRecordEvent.
+    ULONG result  = ProcessTrace(&profiler->ConsumerHandle, 1, NULL, NULL);
+    if   (result != ERROR_SUCCESS)
+    {   // the thread is going to terminate because an error occurred.
+        ConsoleError("ERROR (%S): Context switch consumer terminating with result %08X.\n", __FUNCTION__, result);
+        return 1;
+    }
+
+    // all events have been consumed, so close the trace session.
+    CloseHandle(profiler->ConsumerLaunch); profiler->ConsumerLaunch = NULL;
+    CloseTrace(profiler->ConsumerHandle); profiler->ConsumerHandle = NULL;
+    return 0;
 }
 
 /// @summary Implements the WndProc for the main game window.
@@ -430,6 +566,72 @@ CreateMainWindow
     return hwnd;
 }
 
+/// @summary Allocate resources for a new WIN32_PROFILER_EVENTS container, open a trace session and consume the event data.
+/// @param ev The profiler events container to initialize.
+/// @param trace_file A NULL-terminated string specifying the path of the file to load.
+internal_function int
+NewProfilerEvents
+(
+    WIN32_PROFILER_EVENTS         *ev, 
+    TCHAR const           *trace_file
+)
+{   
+    TRACEHANDLE           trace = INVALID_PROCESSTRACE_HANDLE;
+    EVENT_TRACE_LOGFILE logfile = {};
+    HANDLE               thread = NULL;
+    unsigned int            tid = 0;
+
+    // initialize the fields of the events structure.
+    ev->EventBuffer      = NULL;
+    ev->EventBufferSize  = 0;
+    ev->ConsumerHandle   = INVALID_PROCESSTRACE_HANDLE;
+    ev->ConsumerLaunch   = CreateEvent(NULL, TRUE, FALSE, NULL); // manual-reset
+    ev->ConsumerThread   = NULL;
+    ev->ConsumerThreadId = 0;
+
+    // attempt to open the trace file from the supplied path.
+    logfile.LogFileName         = (TCHAR*)trace_file;
+    logfile.LoggerName          = NULL;
+    logfile.ProcessTraceMode    = PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
+    logfile.EventRecordCallback = ProfilerRecordEvent;
+    logfile.Context             = ev;
+    if ((trace = OpenTrace(&logfile)) == INVALID_PROCESSTRACE_HANDLE)
+    {   // if the trace cannot be opened, there's no point in continuing.
+        ConsoleError("ERROR (%S): Unable to open the trace session (%08X).\n", __FUNCTION__, GetLastError());
+        CloseHandle(ev->ConsumerLaunch); ev->ConsumerLaunch = NULL;
+        return -1;
+    }
+
+    // start a background thread to receive events read from the trace file.
+    if ((thread = (HANDLE)_beginthreadex(NULL, 0, EventConsumerThreadMain, ev, 0, &tid)) == NULL)
+    {   // without the background thread, the profiler can't receive the events.
+        ConsoleError("ERROR (%S): Unable to start event consumer thread (errno = %d).\n", __FUNCTION__, errno);
+        CloseHandle(ev->ConsumerLaunch); ev->ConsumerLaunch = NULL;
+        CloseTrace(trace);
+        return -1;
+    }
+
+    // TODO(rlk): might want to move to a memory arena system based around VirtualAlloc.
+    // this would provide better performance and probably lead to less memory waste.
+    ev->EventBuffer      = (uint8_t*) malloc(64 * 1024); // 64KB
+    ev->EventBufferSize  = 64 * 1024;
+    ev->ConsumerHandle   = trace;
+    ev->ConsumerThread   = thread;
+    ev->ConsumerThreadId = tid;
+
+    // initialize the storage for the context switch track. context switch events
+    // occur at an extremely high frequency (10000+/core/second).
+    ev->CSwitchTime.clear(); ev->CSwitchTime.reserve(1000000);
+    ev->CSwitchData.clear(); ev->CSwitchData.reserve(1000000);
+
+    // TODO(rlk): initialize other event data containers here.
+    // ...
+
+    // start populating our data structures with event data from the trace file.
+    SetEvent(ev->ConsumerLaunch);
+    return 0;
+}
+
 /*////////////////////////
 //   Public Functions   //
 ////////////////////////*/
@@ -448,9 +650,10 @@ WinMain
     int        show_command
 )
 {
-    COMMAND_LINE argv;
-    HWND  main_window;
-    bool  keep_running = true;
+    WIN32_PROFILER_EVENTS events;
+    COMMAND_LINE            argv;
+    HWND             main_window;
+    bool           keep_running = true;
 
     UNREFERENCED_PARAMETER(this_instance);
     UNREFERENCED_PARAMETER(prev_instance);
@@ -468,6 +671,12 @@ WinMain
         return 0;
     }
     CreateConsoleAndRedirectStdio();
+
+    // test test load a trace file
+    if (argv.TraceFile != NULL)
+    {
+        NewProfilerEvents(&events, argv.TraceFile);
+    }
 
     // run the main thread loop.
     while (keep_running)
@@ -496,6 +705,11 @@ WinMain
 
         // TODO(rlk): Present the backbuffer
         Sleep(16);
+    }
+
+    if (events.ConsumerHandle != NULL)
+    {
+        WaitForSingleObject(events.ConsumerThread, INFINITE);
     }
     return 0;
 }
