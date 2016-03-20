@@ -49,6 +49,69 @@ struct PROFILER_CONFIG
     uint32_t    GeneralPoolSize;         /// The maximum number of worker threads in the application general thread pool.
 };
 
+/*///////////////
+//   Globals   //
+///////////////*/
+/// @summary The MOF class Image event GUID (ImageLoadGuid). The GUID is {2cb15d1d-5fc1-11d2-abe1-00a0c911f518}.
+/// See NT Kernel Logger Constants: https://msdn.microsoft.com/en-us/library/windows/desktop/aa364085(v=vs.85).aspx
+DEFINE_GUID(
+    KernelImageLoadEventGuid,
+    0x2cb15d1d,
+    0x5fc1,
+    0x11d2,
+    0xab, 0xe1, 0x00, 0xa0, 0xc9, 0x11, 0xf5, 0x18);
+
+/// @summary The MOF class Process event GUID (ProcessGuid). The GUID is {3d6fa8d0-fe05-11d0-9dda-00c04fd7ba7c}.
+/// See NT Kernel Logger Constants: https://msdn.microsoft.com/en-us/library/windows/desktop/aa364085(v=vs.85).aspx
+DEFINE_GUID(
+    KernelProcessEventGuid,
+    0x3d6fa8d0,
+    0xfe05,
+    0x11d0,
+    0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c);
+
+/// @summary The MOF class Thread event GUID (ThreadGuid). The GUID is {3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c}.
+/// See NT Kernel Logger Constants: https://msdn.microsoft.com/en-us/library/windows/desktop/aa364085(v=vs.85).aspx
+DEFINE_GUID(
+    KernelThreadEventGuid,
+    0x3d6fa8d1,
+    0xfe05,
+    0x11d0,
+    0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c);
+
+/// @summary The MOF class PerfInfo event GUID (PerfInfoGuid). The GUID is {ce1dbfb4-137e-4da6-87b0-3f59aa102cbc}.
+/// See NT Kernel Logger Constants: https://msdn.microsoft.com/en-us/library/windows/desktop/aa364085(v=vs.85).aspx
+DEFINE_GUID(
+    KernelPerfInfoEventGuid,
+    0xce1dbfb4,
+    0x137e,
+    0x4da6,
+    0x87, 0xb0, 0x3f, 0x59, 0xaa, 0x10, 0x2c, 0xbc);
+
+/// @summary The Profiler.Task provider GUID. The GUID is {042cd377-8f6e-4Bf0-93de-b4ba32234771}.
+DEFINE_GUID(
+    TaskProfilerProviderGuid, 
+    0x042cd377, 
+    0x8f6e,
+    0x4bf0, 
+    0x93, 0xde, 0xb4, 0xba, 0x32, 0x23, 0x47, 0x71);
+
+/// @summary The RegisterSchedulerComponents event GUID. The GUID is {B4C458C7-AD6A-494C-9517-159821F304BE}.
+DEFINE_GUID(
+    RegisterSchedulerComponentsEventGuid, 
+    0xb4c458c7, 
+    0xad6a, 
+    0x494c,
+    0x95, 0x17, 0x15, 0x98, 0x21, 0xf3, 0x04, 0xbe);
+
+/// @summary The TaskStateTransition event GUID. The GUID is {249C14B6-FEE0-4797-930F-2B08389A3EFD}.
+DEFINE_GUID(
+    TaskStateTransitionEventGuid, 
+    0x249c14b6, 
+    0xfee0, 
+    0x4797, 
+    0x93, 0x0f, 0x2b, 0x08, 0x38, 0x9a, 0x3e, 0xfd);
+
 /*//////////////////////////
 //   Internal Functions   //
 //////////////////////////*/
