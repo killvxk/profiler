@@ -2,6 +2,20 @@
 /// @summary Implement the entry point of the profile visualizer application.
 ///////////////////////////////////////////////////////////////////////////80*/
 
+// TODO(rlk): Here are some notes on how things will have to be organized.
+// 1. Need to use the Image/Image_V1_Load MOF event to retrieve module base address, etc. required for symbol resolution.
+//    - This is per-process; Image_V1_Load includes the process ID also (Image_V0_Load does not include process ID.)
+// 2. Need to use the Process/Process_TypeGroup1 event to retrieve information about the running processes.
+//    - Mainly care about the PID and ImageName, but CommandLine is also available.
+// 3. Need to use the Thread/Thread_V2_TypeGroup1 event to retrieve information about the threads in each process.
+//    - The Win32StartAddr gives the entry point.
+// 4. Need to understand the types of queries that will be performed on this data and organize accordingly.
+//    - Processes and threads may start and stop during the trace.
+// 5. Know that task scheduler setup events may not be present - they could have been overwritten in the trace.
+//    - Need to be able to reconstruct this information from the state transition events.
+//    - Pool and source index. are available as part of the task ID.
+//    - Pool index can be calculated from source index; see scheduler source code.
+
 /*////////////////////
 //   Preprocessor   //
 ////////////////////*/
