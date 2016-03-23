@@ -85,13 +85,66 @@ ObjectAliveAtTime
     return ObjectAliveAtTime(lifetime, uint64_t(timestamp.QuadPart));
 }
 
+public_function bool
+FindEventsInRange
+(
+    std::vector<uint64_t> const &event_times, 
+    uint64_t                     range_lower, 
+    uint64_t                     range_upper, 
+    size_t                      &index_lower, 
+    size_t                      &index_upper
+)
+{   // find index of first timestamp >= range_upper and preceeding timestamp < range_upper
+    // find index of first timestamp >= range_lower and preceeding timestamp < range_lower
+    // there could potentially be 1M+ events in the list, so linear search is out.
+    // check for early outs first.
+    intptr_t min_i =  0;
+    intptr_t max_i = (intptr_t) event_times.size();
+}
+
+/// 
+public_function bool
+FindProcessByPidAndTime
+(
+    WIN32_PROCESS_LIST  *list, 
+    uint32_t              pid, 
+    uint64_t             time, 
+    size_t             &index
+)
+{
+    for (size_t i = 0, n = list->ProcessCount; i < n; ++i)
+    {
+        if (list->ProcessId[i] == pid)
+        {   // found a matching process ID; was the process alive at the specified time?
+            if (ObjectAliveAtTime(list->ProcessLifetime[i], time))
+            {   // the process was alive, so we have a match.
+                index = i; return true;
+            }
+            // else, the process was not alive; keep searching.
+        }
+    }
+    return false;
+}
+
+internal_function WIN32_PROCESS_INFO*
+FindProcessByPidAndTime
+(
+    WIN32_PROCESS_LIST  *list,
+    uint32_t              pid, 
+    LARGE_INTEGER        time, 
+    size_t             &index
+)
+{
+    return FindProcessByPidAndTime(list, pid, uint64_t(time.QuadPart), index);
+}
+
 /// @summary Retrieve a 32-bit unsigned integer property value from an event record.
 /// @param ev The EVENT_RECORD passed to TaskProfilerRecordEvent.
 /// @param info_buf The TRACE_EVENT_INFO containing event metadata.
 /// @param index The zero-based index of the property to retrieve.
 /// @return The integer value.
-internal_function uint32_t
-ProfilerGetUInt32
+public_function uint32_t
+TraceEventGetUInt32
 (
     EVENT_RECORD           *ev, 
     TRACE_EVENT_INFO *info_buf, 
@@ -112,8 +165,8 @@ ProfilerGetUInt32
 /// @param info_buf The TRACE_EVENT_INFO containing event metadata.
 /// @param index The zero-based index of the property to retrieve.
 /// @return The integer value.
-internal_function int8_t
-ProfilerGetSInt8
+public_function int8_t
+TraceEventGetSInt8
 (
     EVENT_RECORD           *ev, 
     TRACE_EVENT_INFO *info_buf, 
@@ -134,8 +187,8 @@ ProfilerGetSInt8
 /// @param info_buf The TRACE_EVENT_INFO containing event metadata.
 /// @param index The zero-based index of the property to retrieve.
 /// @return The NULL-terminated string buffer, or NULL. Free the returned buffer with the standard C library free function.
-internal_function char*
-ProfilerGetAnsiStr
+public_function char*
+TraceEventGetAnsiStr
 (
     EVENT_RECORD           *ev, 
     TRACE_EVENT_INFO *info_buf, 
@@ -163,8 +216,8 @@ ProfilerGetAnsiStr
 /// @param info_buf The TRACE_EVENT_INFO containing event metadata.
 /// @param index The zero-based index of the property to retrieve.
 /// @return The zero-terminated string buffer, or NULL. Free the returned buffer with the standard C library free function.
-internal_function WCHAR*
-ProfilerGetWideStr
+public_function WCHAR*
+TraceEventGetWideStr
 (
     EVENT_RECORD           *ev, 
     TRACE_EVENT_INFO *info_buf, 
@@ -190,7 +243,7 @@ ProfilerGetWideStr
 /// @summary Examine the ProviderGuid to determine whether an event was produced by the kernel logger.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event was produced by the kernel trace logger.
-internal_function inline bool
+public_function inline bool
 IsKernelTraceProvider
 (
     TRACE_EVENT_INFO const *info_buf
@@ -202,7 +255,7 @@ IsKernelTraceProvider
 /// @summary Examine the ProviderGuid to determine whether an event was produced by the task profiler.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event was produced by the task profiler provider.
-internal_function inline bool
+public_function inline bool
 IsTaskProfilerProvider
 (
     TRACE_EVENT_INFO const *info_buf
@@ -214,7 +267,7 @@ IsTaskProfilerProvider
 /// @summary Examine the EventGuid to determine whether an event is a MOF Image_Load class event.
 /// @param info_bu A pointer to the event metadata.
 /// @return true if the event is a kernel trace image load or unload event.
-internal_function inline bool
+public_function inline bool
 IsKernelImageLoadEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -226,7 +279,7 @@ IsKernelImageLoadEvent
 /// @summary Examine the EventGuid to determine whether an event is a MOF Process class event.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event is a kernel trace process event.
-internal_function inline bool
+public_function inline bool
 IsKernelProcessEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -238,7 +291,7 @@ IsKernelProcessEvent
 /// @summary Examine the EventGuid to determine whether an event is a MOF Thread class event.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event is a kernel trace thread event.
-internal_function inline bool
+public_function inline bool
 IsKernelThreadEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -250,7 +303,7 @@ IsKernelThreadEvent
 /// @summary Examine the EventGuid to determine whether an event is a profiler performance info event.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event is a kernel profiler performance info event.
-internal_function inline bool
+public_function inline bool
 IsKernelPerfInfoEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -262,7 +315,7 @@ IsKernelPerfInfoEvent
 /// @summary Examine the EventGuid to determine whether an event is a task profiler setup event.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event represents a task profiler setup event.
-internal_function inline bool
+public_function inline bool
 IsTaskProfilerSetupEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -274,7 +327,7 @@ IsTaskProfilerSetupEvent
 /// @summary Examine the EventGuid to determine whether an event is a TaskStateTransition event representing a task definition, ready-to-run, launch or finish transition.
 /// @param info_buf A pointer to the event metadata.
 /// @return true if the event represents a task state transition.
-internal_function inline bool
+public_function inline bool
 IsTaskProfilerTaskTransitionEvent
 (
     TRACE_EVENT_INFO const *info_buf
@@ -283,7 +336,7 @@ IsTaskProfilerTaskTransitionEvent
     return IsEqualGUID(info_buf->EventGuid, TaskStateTransitionEventGuid) != FALSE;
 }
 
-internal_function void
+public_function void
 ConsumeKernel_Thread_CSwitch
 (
     WIN32_PROFILER_EVENTS      *rtev, 
@@ -326,7 +379,7 @@ ConsumeKernel_Thread_CSwitch
 /// @param ev The kernel trace event to process.
 /// @param terminate Specify true if the event specifies a process termination, or false if it indicates a process launch.
 /// @return A pointer to the WIN32_PROCESS_INFO record that was updated.
-internal_function WIN32_PROCESS_INFO*
+public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Process_TypeGroup1
 (
     WIN32_PROFILER_EVENTS      *rtev, 
@@ -334,33 +387,6 @@ ConsumeKernel_Process_TypeGroup1
     ULONG                  info_size, 
     EVENT_RECORD                 *ev, 
     bool                   terminate
-)
-{
-}
-
-internal_function WIN32_PROCESS_INFO*
-FindProcessByPidAndTime
-(
-    WIN32_PROFILER_EVENTS *rtev, 
-    uint32_t                pid, 
-    uint64_t               time
-)
-{
-    WIN32_PROCESS_LIST const   &list = rtev->ProcessList;
-    for (size_t i = 0, n = list.ProcessCount; i < n; ++i)
-    {
-        if (list.ProcessId[i] == pid)
-        {   // found a matching process ID, check the timestamp.
-            if (time >= list.ProcessLifetime[i].CreateTime
-    }
-}
-
-internal_function WIN32_PROCESS_INFO*
-FindProcessByPidAndTime
-(
-    WIN32_PROFILER_EVENTS *rtev, 
-    uint32_t                pid, 
-    LONGLONG               time
 )
 {
 }
