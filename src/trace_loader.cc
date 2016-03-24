@@ -86,20 +86,85 @@ ObjectAliveAtTime
 }
 
 public_function bool
-FindEventsInRange
+FindEventsInTimeRange
 (
-    std::vector<uint64_t> const &event_times, 
-    uint64_t                     range_lower, 
-    uint64_t                     range_upper, 
-    size_t                      &index_lower, 
-    size_t                      &index_upper
+    uint64_t const *event_times, 
+    size_t   const  event_count,
+    uint64_t        range_lower, 
+    uint64_t        range_upper, 
+    size_t         &index_lower, 
+    size_t         &index_upper,
+    size_t        &output_count
 )
 {   // find index of first timestamp >= range_upper and preceeding timestamp < range_upper
     // find index of first timestamp >= range_lower and preceeding timestamp < range_lower
     // there could potentially be 1M+ events in the list, so linear search is out.
-    // check for early outs first.
-    intptr_t min_i =  0;
-    intptr_t max_i = (intptr_t) event_times.size();
+    if (event_count == 0)
+    {   // early out - the event set is empty.
+        output_count = 0;
+        return false;
+    }
+    if (range_upper <= event_times[0])
+    {   // early out - the time range occurs prior to the start of the event set.
+        output_count = 0;
+        return false;
+    }
+    if (range_lower >= event_times[event_count-1])
+    {   // early out - the time range starts after the end of the event set.
+        output_count = 0;
+        return false;
+    }
+    if (range_lower <= event_times[0])
+    {   // early out for lower bound, which occurs prior to the start of the event set.
+        index_lower  = 0;
+    }
+    else
+    {   // perform a binary search for the first value less than the lower bound, 
+        // where the following value is greater than or equal to the lower bound.
+        intptr_t min_i =  0;
+        intptr_t max_i = (intptr_t) (event_count - 1);
+        intptr_t mid_i =  max_i / 2;
+        do
+        {
+            if (event_times[mid_i] >= lower_bound)
+            {   // move the upper bound search index closer to the start of the search space.
+                max_i = mid_i - 1;
+            }
+            else
+            {   // move the lower bound search index closer to the end of the search space.
+                min_i = mid_i + 1;
+            }
+            // divide the search space in half for the next iteration.
+            mid_i = min_i + ((max_i - min_i) / 2);
+        }
+        while (min_i <= max_i); /* result => */ index_lower = (size_t)(max_i + 1);
+    }
+    if (range_upper >= event_times[event_count-1])
+    {   // early out for upper bound, which occurs after the end of the event set.
+        index_upper  = event_count - 1;
+    }
+    else
+    {   // perform a binary search for the first value greater than the upper bound, 
+        // where the previous value is less than or equal to the upper bound.
+        intptr_t min_i =  0;
+        intptr_t max_i = (intptr_t) (event_count - 1);
+        intptr_t mid_i =  max_i / 2;
+        do
+        {
+            if (event_times[mid_i] > upper_bound)
+            {   // move the upper bound search index closer to the start of the search space.
+                max_i = mid_i - 1;
+            }
+            else
+            {   // move the lower bound search index closer to the end of the search space.
+                min_i = mid_i + 1;
+            }
+        }
+        while (min_i <= max_i); /* result => */ index_upper = (size_t)(min_i - 1);
+    }
+
+    output_count = (index_upper - index_lower) + 1;
+    return true;
 }
 
 /// 
