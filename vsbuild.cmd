@@ -1,5 +1,6 @@
 @ECHO OFF
-CALL build-provider.cmd
-CALL build-profiler.cmd
-CALL build-visualizer.cmd
+CALL build-tests.cmd
+@REM CALL build-provider.cmd
+@REM CALL build-profiler.cmd
+@REM CALL build-visualizer.cmd
 
