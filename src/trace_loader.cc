@@ -85,6 +85,22 @@ ObjectAliveAtTime
     return ObjectAliveAtTime(lifetime, uint64_t(timestamp.QuadPart));
 }
 
+// TODO(rlk): need a function to convert from seconds back to ticks.
+// or, better, just convert all timestamps to nanoseconds on load.
+//
+// TODO(rlk): FindEventsInTimeRange may not be sufficient. It will find all events that *started* in the time range, 
+// or all events that *ended* in the time range, but an event may start prior to the beginning of the time range, 
+// and end after the end of the time range.
+
+/// @summary Find the range of events that fall within a given time range.
+/// @param event_times An array of timestamp values, sorted into ascending order, and possibly containing duplicates, where each timestamp corresponds to an event. 
+/// @param event_count The number of elements in the array of event times.
+/// @param range_lower The start of the search interval, in nanoseconds.
+/// @param range_upper The end of the search interval, in nanoseconds.
+/// @param index_lower On return, this value is set to the zero-based index of the oldest event in the time range.
+/// @param index_upper On return, this value is set to the zero-based index of the newest event in the time range.
+/// @param output_count On return, this value is set to the the number of events in the time range.
+/// @return true if at least one event occurred within the time range.
 public_function bool
 FindEventsInTimeRange
 (
@@ -96,20 +112,18 @@ FindEventsInTimeRange
     size_t         &index_upper,
     size_t        &output_count
 )
-{   // find index of first timestamp >= range_upper and preceeding timestamp < range_upper
-    // find index of first timestamp >= range_lower and preceeding timestamp < range_lower
-    // there could potentially be 1M+ events in the list, so linear search is out.
+{
     if (event_count == 0)
     {   // early out - the event set is empty.
         output_count = 0;
         return false;
     }
-    if (range_upper <= event_times[0])
+    if (range_upper  < event_times[0])
     {   // early out - the time range occurs prior to the start of the event set.
         output_count = 0;
         return false;
     }
-    if (range_lower >= event_times[event_count-1])
+    if (range_lower  > event_times[event_count-1])
     {   // early out - the time range starts after the end of the event set.
         output_count = 0;
         return false;
@@ -121,23 +135,23 @@ FindEventsInTimeRange
     else
     {   // perform a binary search for the first value less than the lower bound, 
         // where the following value is greater than or equal to the lower bound.
-        intptr_t min_i =  0;
-        intptr_t max_i = (intptr_t) (event_count - 1);
-        intptr_t mid_i =  max_i / 2;
-        do
-        {
-            if (event_times[mid_i] >= lower_bound)
-            {   // move the upper bound search index closer to the start of the search space.
-                max_i = mid_i - 1;
+        intptr_t   m;
+        intptr_t   l = -1;
+        intptr_t   r = intptr_t(event_count) - 1;
+        while (r - l > 1)
+        {   // calculate the midpoint of the search interval.
+            m = l + (r - l) / 2;
+            // check the time value at the midpoint.
+            if (event_times[m] >= range_lower)
+            {   // move the upper-bound search index closer to the start of the search space.
+                r = m;
             }
             else
-            {   // move the lower bound search index closer to the end of the search space.
-                min_i = mid_i + 1;
+            {   // move the lower-bound search index closer to the end of the search space.
+                l = m;
             }
-            // divide the search space in half for the next iteration.
-            mid_i = min_i + ((max_i - min_i) / 2);
         }
-        while (min_i <= max_i); /* result => */ index_lower = (size_t)(max_i + 1);
+        index_lower = size_t(r);
     }
     if (range_upper >= event_times[event_count-1])
     {   // early out for upper bound, which occurs after the end of the event set.
@@ -146,21 +160,23 @@ FindEventsInTimeRange
     else
     {   // perform a binary search for the first value greater than the upper bound, 
         // where the previous value is less than or equal to the upper bound.
-        intptr_t min_i =  0;
-        intptr_t max_i = (intptr_t) (event_count - 1);
-        intptr_t mid_i =  max_i / 2;
-        do
-        {
-            if (event_times[mid_i] > upper_bound)
-            {   // move the upper bound search index closer to the start of the search space.
-                max_i = mid_i - 1;
+        intptr_t   m;
+        intptr_t   l = 0;
+        intptr_t   r = intptr_t(event_count);
+        while (r - l > 1)
+        {   // calculate the midpoint of the search interval.
+            m = l + (r - l) / 2;
+            // check the time value at the midpoint.
+            if (event_times[m] <= range_upper)
+            {   // move the lower-bound search index closer to the end of the search space.
+                l = m;
             }
             else
-            {   // move the lower bound search index closer to the end of the search space.
-                min_i = mid_i + 1;
+            {   // move the upper-bound search index closer to the start of the search space.
+                r = m;
             }
         }
-        while (min_i <= max_i); /* result => */ index_upper = (size_t)(min_i - 1);
+        index_upper = size_t(l);
     }
 
     output_count = (index_upper - index_lower) + 1;
