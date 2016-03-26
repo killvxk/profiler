@@ -183,40 +183,37 @@ FindEventsInTimeRange
     return true;
 }
 
-/// 
+/// @summary Search an object list (process, thread, etc.) for an object with a given identifier that was alive at a particular time.
+/// @param key_list The list of object identifiers to search. The list may contain duplicates.
+/// @param lifetime_list The list of object lifetimes corresponding to each identifier.
+/// @param object_count The number of values in the key and lifetime lists.
+/// @param search_key The identifier of the object to locate.
+/// @param search_time The query time, in nanoseconds. The object must be alive at this time.
+/// @param object_index If the function returns true, this value is set to the zero-based index of the object in the object list.
+/// @return true if an object with the specified identifier was alive at located at the specified time, or false otherwise.
 public_function bool
-FindProcessByPidAndTime
+FindObjectByU32AndTime
 (
-    WIN32_PROCESS_LIST  *list, 
-    uint32_t              pid, 
-    uint64_t             time, 
-    size_t             &index
+    uint32_t       const      *key_list,
+    WIN32_LIFETIME const *lifetime_list, 
+    size_t         const   object_count,
+    uint32_t                 search_key, 
+    uint64_t                search_time, 
+    size_t                &object_index
 )
 {
-    for (size_t i = 0, n = list->ProcessCount; i < n; ++i)
+    for (size_t i = 0; i < object_count; ++i)
     {
-        if (list->ProcessId[i] == pid)
-        {   // found a matching process ID; was the process alive at the specified time?
-            if (ObjectAliveAtTime(list->ProcessLifetime[i], time))
-            {   // the process was alive, so we have a match.
-                index = i; return true;
+        if (key_list[i] == search_key)
+        {   // found a key match, check lifetime.
+            if (ObjectAliveAtTime(lifetime_list[i], search_time))
+            {   // the object was also alive, so we have a match.
+                object_index = i;
+                return true;
             }
-            // else, the process was not alive; keep searching.
         }
     }
     return false;
-}
-
-internal_function WIN32_PROCESS_INFO*
-FindProcessByPidAndTime
-(
-    WIN32_PROCESS_LIST  *list,
-    uint32_t              pid, 
-    LARGE_INTEGER        time, 
-    size_t             &index
-)
-{
-    return FindProcessByPidAndTime(list, pid, uint64_t(time.QuadPart), index);
 }
 
 /// @summary Retrieve a 32-bit unsigned integer property value from an event record.
