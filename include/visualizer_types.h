@@ -50,10 +50,11 @@ struct WIN32_PROCESS_INFO
     uint32_t                            ProcessId;         /// The operating system process identifier.
     uint32_t                            Reserved;          /// Reserved for future use. Set to 0.
     WCHAR                              *Executable;        /// The path of the process executable image.
-    WIN32_IMAGE_INFO                   *ProcessImage;      /// Points to additional information about the process executable image.
+    size_t                              ThreadCount;       /// The number of threads created during the process lifetime.
     std::vector<uint32_t>               ThreadId;          /// The operating system identifier for each thread that existed at some point during the process lifetime.
     std::vector<WIN32_LIFETIME>         ThreadLifetime;    /// The creation and destruction time for each thread that existed at some point during the process lifetime.
     std::vector<WIN32_THREAD_INFO>      ThreadInfo;        /// Additional information about each thread that existed at some point during the process lifetime.
+    size_t                              ImageCount;        /// The number of executable images loaded into the process address space.
     std::vector<uint32_t>               ImageBaseAddress;  /// The base load address for each image that existed at some point during the process lifetime.
     std::vector<uint32_t>               ImagePathHash;     /// The 32-bit hash of the file path for each image that existed at some point during the process lifetime.
     std::vector<WIN32_LIFETIME>         ImageLifetime;     /// The load and unload time for each image that existed at some point during the process lifetime.
@@ -91,6 +92,8 @@ struct WIN32_PROFILER_EVENTS
     HANDLE                              ConsumerThread;    /// The handle of the thread used to receive events from the trace session.
     unsigned int                        ConsumerThreadId;  /// The operating system identifier of the event consumer thread.
 
+    uint64_t                            TimerResolution;   /// The TimerResolution field of the EVENT_TRACE_LOGFILE::TRACE_LOGFILE_HEADER.
+    LARGE_INTEGER                       ClockFrequency;    /// The PerfFreq field of the EVENT_TRACE_LOGFILE::TRACE_LOGFILE_HEADER.
     WIN32_PROCESS_LIST                  ProcessList;       /// The list of information about all processes that were active during the trace.
 
     std::vector<uint64_t>               CSwitchTime;       /// The timestamp value associated with each context switch event.

@@ -14,6 +14,43 @@
 /*////////////////////////
 //   Public Functions   //
 ////////////////////////*/
+/// @summary Mix the bits of a 32-bit unsigned integer. Used for hash generation.
+/// @param x The 32-bit unsigned integer to mix.
+/// @return The input value, with bits mixed.
+public_function inline uint32_t 
+BitMixU32
+(
+    uint32_t x
+)
+{   // the finalizer from murmurhash3, 32-bit.
+    x ^= x >> 16;
+    x *= 0x85EBCA6B;
+    x ^= x >> 13;
+    x *= 0xC2B2AE35;
+    x ^= x >> 16;
+    return x;
+}
+
+/// @summary Compute a hash value for a zero-terminated wide character string.
+/// @param stringbuf A zero-terminated wide character string.
+/// @return The 32-bit hash of the string.
+public_function uint32_t
+HashWideString
+(
+    WCHAR *stringbuf
+)
+{
+    uint32_t hash  = 0;
+    if (stringbuf != NULL)
+    {
+        while (*stringbuf)
+        {
+            hash = _rotl(*stringbuf++, 7) + hash;
+        }
+    }
+    return BitMixU32(hash);
+}
+
 /// @summary Initialize an object lifetime record.
 /// @param lifetime The record to initialize.
 /// @param create_time The creation timestamp, in ticks. A value of 0 indicates that the object was created before the trace was started.
@@ -85,14 +122,22 @@ ObjectAliveAtTime
     return ObjectAliveAtTime(lifetime, uint64_t(timestamp.QuadPart));
 }
 
-// TODO(rlk): need a function to convert from seconds back to ticks.
-// or, better, just convert all timestamps to nanoseconds on load.
-//
-// TODO(rlk): FindEventsInTimeRange may not be sufficient. It will find all events that *started* in the time range, 
-// or all events that *ended* in the time range, but an event may start prior to the beginning of the time range, 
-// and end after the end of the time range.
+/// @summary Convert an event timestamp from ticks to nanoseconds.
+/// @param ev The event record.
+/// @param frequency The high-resolution timer frequency of the system that produced the trace, in ticks-per-second.
+public_function inline uint64_t
+EventTimeToNanoseconds
+(
+    EVENT_RECORD        *ev, 
+    LARGE_INTEGER frequency
+)
+{
+    uint64_t  timestamp = uint64_t(ev->EventHeader.TimeStamp.QuadPart);
+    uint32_t clock_freq = uint64_t(frequency.QuadPart);
+    return (1000000000ULL * timestamp) / clock_freq;
+}
 
-/// @summary Find the range of events that fall within a given time range.
+/// @summary Find the range of events that started or stopped within a given time range.
 /// @param event_times An array of timestamp values, sorted into ascending order, and possibly containing duplicates, where each timestamp corresponds to an event. 
 /// @param event_count The number of elements in the array of event times.
 /// @param range_lower The start of the search interval, in nanoseconds.
@@ -190,7 +235,7 @@ FindEventsInTimeRange
 /// @param search_key The identifier of the object to locate.
 /// @param search_time The query time, in nanoseconds. The object must be alive at this time.
 /// @param object_index If the function returns true, this value is set to the zero-based index of the object in the object list.
-/// @return true if an object with the specified identifier was alive at located at the specified time, or false otherwise.
+/// @return true if an object with the specified identifier was alive and located at the specified time, or false otherwise.
 public_function bool
 FindObjectByU32AndTime
 (
@@ -214,6 +259,160 @@ FindObjectByU32AndTime
         }
     }
     return false;
+}
+
+/// @summary Search the process list of a profiler events list for a system process identifier.
+/// @param rtev The runtime profiler events record.
+/// @param pid The process identifier to search for.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @param index If the function returns true, this value is set to the zero-based index of the process record in the process list.
+/// @return true if a process with the specified process ID was alive and located at the specified time, or false if no record exists.
+public_function inline bool
+FindProcessByPid
+(
+    WIN32_PROFILER_EVENTS *rtev, 
+    uint32_t                pid, 
+    uint64_t               time, 
+    size_t               &index
+)
+{
+    uint32_t       const       *key_list = &rtev->ProcessList.ProcessId[0];
+    WIN32_LIFETIME const  *lifetime_list = &rtev->ProcessList.ProcessLifetime[0];
+    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessCount, pid, time, index);
+}
+
+/// @summary Search the process list of a profiler events list for a process identified by path.
+/// @param rtev The runtime profiler events record.
+/// @param hash The 32-bit hash value of the process name.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @param index If the function returns true, this value is set to the zero-based index of the process record in the process list.
+/// @return true if a process with the specified process ID was alive and located at the specified time, or false if no record exists.
+public_function inline bool
+FindProcessByName
+(
+    WIN32_PROFILER_EVENTS *rtev, 
+    uint32_t               hash, 
+    uint64_t               time, 
+    size_t               &index
+)
+{
+    uint32_t       const            hash =  HashWideString(path);
+    uint32_t       const       *key_list = &rtev->ProcessList.ProcessHash[0];
+    WIN32_LIFETIME const  *lifetime_list = &rtev->ProcessList.ProcessLifetime[0];
+    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessCount, hash, time, index);
+}
+
+/// @summary Find a process record for the process with the specified identifier. Create a new record if no existing record is found. 
+/// @param rtev The runtime profiler events record to search or update.
+/// @param pid The process identifier to search for.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @return The zero-based index of the process record within the trace process list.
+public_function size_t
+FindOrCreateProcess
+(
+    WIN32_PROFILER_EVENTS *rtev, 
+    uint32_t                pid, 
+    uint64_t               time
+)
+{
+    size_t process_index;
+    if (FindProcessByPid(rtev, pid, time, process_index))
+    {   // return the index of the existing record.
+        return process_index;
+    }
+    else
+    {   // insert a new, empty record in the process list.
+        WIN32_LIFETIME         lifetime;
+        WIN32_PROCESS_INFO process_info;
+        process_info.ProcessId    = pid;
+        process_info.Reserved     = 0;
+        process_info.Executable   = NULL;
+        process_info.ThreadCount  = 0;
+        process_info.ImageCount   = 0;
+        InitObjectLifetime(&lifetime, time);
+        process_index = rtev->ProcessList.ProcessCount++;
+        rtev->ProcessList.ProcessId.push_back(pid);
+        rtev->ProcessList.ProcessHash.push_back(0);
+        rtev->ProcessList.ProcessLifetime.push_back(lifetime);
+        retv->ProcessList.ProcessInfo.push_back(process_info);
+        return process_index;
+    }
+}
+
+/// @summary Search the image list of a process for an executable image path.
+/// @param process The process record to search.
+/// @param hash The 32-bit hash value of the executable image path.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @param index If the function returns true, this value is set to the zero-based index of the image record in the process image list.
+/// @return true if an image with the specified path was alive and located at the specified time, or false if no record exists.
+public_function bool
+FindImageByName
+(
+    WIN32_PROCESS_INFO *process, 
+    uint32_t               hash,
+    uint64_t               time, 
+    size_t               &index
+)
+{
+    uint32_t       const      *key_list  = &process->ImageHash[0];
+    WIN32_LIFETIME const *lifetime_list  = &process->ImageLifetime[0];
+    return FindObjectByU32AndTime(key_list, lifetime_list, process->ImageCount, hash, time, index);
+}
+
+/// @summary Search the image list of a process for an executable image given the base load address.
+/// @param process The process record to search.
+/// @param addr The base load address of the executable image.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @param index If the function returns true, this value is set to the zero-based index of the image record in the process image list.
+/// @return true if an image with the specified load address was alive and located at the specified time, or false if no record exists.
+public_function bool
+FindImageByBaseAddress
+(
+    WIN32_PROCESS_INFO *process, 
+    uint32_t               addr, 
+    uint64_t               time, 
+    size_t               &index
+)
+{
+    uint32_t       const      *key_list = &process->ImageBaseAddress[0];
+    WIN32_LIFETIME const *lifetime_list = &process->ImageLifetime[0];
+    return FindObjectByU32AndTime(key_list, lifetime_list, process->ImageCount, addr, time, index);
+}
+
+/// @summary Find an executable image record for the image with the specified attributes. Create a new record if no existing record is found. 
+/// @param process The process record to search.
+/// @param path The zero-terminated path of the executable image.
+/// @param addr The base load address of the executable image in the process address space.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @return The zero-based index of the image record within the process image list.
+public_function size_t
+FindOrCreateImage
+(
+    WIN32_PROCESS_INFO *process, 
+    WCHAR                 *path,
+    uint32_t               addr, 
+    uint64_t               time
+)
+{
+    size_t   image_index;
+    uint32_t const  image_hash = HashWideString(path);
+    if (FindImageByName(process, hash, time, image_index))
+    {   // return the index of the existing record.
+        return image_index;
+    }
+    else
+    {   // insert a new, empty record in the process image list.
+        WIN32_LIFETIME     lifetime;
+        WIN32_IMAGE_INFO image_info;
+        image_info.ImagePath = path;
+        InitObjectLifetime(&lifetime, time);
+        image_index = process->ImageCount++;
+        process->.push_back(pid);
+        rtev->ProcessList.ProcessHash.push_back(0);
+        rtev->ProcessList.ProcessLifetime.push_back(lifetime);
+        retv->ProcessList.ProcessInfo.push_back(process_info);
+        return process_index;
+    }
 }
 
 /// @summary Retrieve a 32-bit unsigned integer property value from an event record.
@@ -469,9 +668,43 @@ ConsumeKernel_Process_TypeGroup1
 {
 }
 
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_ImageLoad_Load
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{   // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    size_t   const          image_ix = process_info->ImageCount++;
+    WCHAR                *image_path = TraceEventGetWideStr(ev, info_buf, 11);
+    uint32_t              image_hash = HashWideString(image_path);
+}
+
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_ImageLoad_Unload
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+}
+
 // Other ConsumePROVIDER_EVENT functions here
 // ... 
 
+/// @summary Dispatches a process start or stop event for data extraction.
+/// @param rtev The runtime event data to update.
+/// @param info_buf Metadata associated with the trace event.
+/// @param info_size The size of the metadata associated with the trace event, in bytes.
+/// @param ev The trace event record.
 internal_function void
 FilterKernelProcessEvent
 (
@@ -491,6 +724,11 @@ FilterKernelProcessEvent
     }
 }
 
+/// @summary Dispatches a thread start or stop event for data extraction.
+/// @param rtev The runtime event data to update.
+/// @param info_buf Metadata associated with the trace event.
+/// @param info_size The size of the metadata associated with the trace event, in bytes.
+/// @param ev The trace event record.
 internal_function void
 FilterKernelThreadEvent
 (
@@ -518,6 +756,11 @@ FilterKernelThreadEvent
     }
 }
 
+/// @summary Dispatches an image (executable or DLL) load event for data extraction.
+/// @param rtev The runtime event data to update.
+/// @param info_buf Metadata associated with the trace event.
+/// @param info_size The size of the metadata associated with the trace event, in bytes.
+/// @param ev The trace event record.
 internal_function void
 FilterKernelImageLoadEvent
 (
@@ -527,8 +770,21 @@ FilterKernelImageLoadEvent
     EVENT_RECORD                 *ev
 )
 {
+    if (info_buf->EventDescriptor.Opcode == 3 || info_buf->EventDescriptor.Opcode == 10)
+    {   // information about an image that was just loaded, or was loaded before the trace started. 
+        // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+    }
+    if (info_buf->EventDescriptor.Opcode == 2)
+    {   // information about an image that was just unloaded.
+        // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+    }
 }
 
+/// @summary Dispatches a trace event from the NT kernel logger provider for data extraction.
+/// @param rtev The runtime event data to update.
+/// @param info_buf Metadata associated with the trace event.
+/// @param info_size The size of the metadata associated with the trace event, in bytes.
+/// @param ev The trace event record.
 internal_funfction void
 FilterKernelProviderEvent
 (
@@ -544,6 +800,11 @@ FilterKernelProviderEvent
     // else, the profiler doesn't currently care about this class of kernel trace event.
 }
 
+/// @summary Dispatches a trace event from the task profiler provider for data extraction.
+/// @param rtev The runtime event data to update.
+/// @param info_buf Metadata associated with the trace event.
+/// @param info_size The size of the metadata associated with the trace event, in bytes.
+/// @param ev The trace event record.
 internal_funfction void
 FilterTaskProfilerEvent
 (
@@ -667,11 +928,13 @@ NewProfilerEvents
 
     // TODO(rlk): might want to move to a memory arena system based around VirtualAlloc.
     // this would provide better performance and probably lead to less memory waste.
-    ev->EventBuffer      = (uint8_t*) malloc(64 * 1024); // 64KB
+    ev->EventBuffer      =(uint8_t*) malloc(64 * 1024); // 64KB
     ev->EventBufferSize  = 64 * 1024;
     ev->ConsumerHandle   = trace;
     ev->ConsumerThread   = thread;
     ev->ConsumerThreadId = tid;
+    ev->TimerResolution  =(uint64_t) logfile.LogfileHeader.TimerResolution;
+    ev->ClockFrequency   = logfile.LogfileHeader.PerfFreq;
 
     // initialize the storage for the context switch track. context switch events
     // occur at an extremely high frequency (10000+/core/second).
