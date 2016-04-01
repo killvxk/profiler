@@ -296,7 +296,6 @@ FindProcessByName
     size_t               &index
 )
 {
-    uint32_t       const            hash =  HashWideString(path);
     uint32_t       const       *key_list = &rtev->ProcessList.ProcessHash[0];
     WIN32_LIFETIME const  *lifetime_list = &rtev->ProcessList.ProcessLifetime[0];
     return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessCount, hash, time, index);
@@ -336,6 +335,62 @@ FindOrCreateProcess
         rtev->ProcessList.ProcessLifetime.push_back(lifetime);
         retv->ProcessList.ProcessInfo.push_back(process_info);
         return process_index;
+    }
+}
+
+/// @summary Search the thread list of a process for a thread given the thread ID.
+/// @param process The process record to search.
+/// @param tid The operating system identifier of the thread.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @param index If the function returns true, this value is set to the zero-based index of the thread record in the process thread list.
+/// @return true if a thread with the specified identifier was alive and located at the specified time, or false if no record exists.
+public_function bool
+FindThreadByTid
+(
+    WIN32_PROCESS_INFO *process, 
+    uint32_t                tid, 
+    uint64_t               time, 
+    size_t               &index
+)
+{
+    uint32_t       const      *key_list = &process->ThreadId[0];
+    WIN32_LIFETIME const *lifetime_list = &process->ThreadLifetime[0];
+    return FindObjectByU32AndTime(key_list, lifetime_list, process->ThreadCount, tid, time, index);
+}
+
+/// @summary Find a record for the thread with the specified ID. Create a new record if no existing record is found. 
+/// @param process The process record to search.
+/// @param tid The operating system identifier of the thread.
+/// @param entry The address of the thread entry point in the process address space.
+/// @param time The nanosecond timestamp at which the event occurred.
+/// @return The zero-based index of the thread record within the process thread list.
+public_function size_t
+FindOrCreateThread
+(
+    WIN32_PROCESS_INFO *process, 
+    uint32_t                tid,
+    uint32_t              entry, 
+    uint64_t               time
+)
+{
+    size_t thread_index;
+    if (FindThreadById(process, tid, time, thread_index))
+    {   // return the index of the existing record.
+        return thread_index;
+    }
+    else
+    {   // insert a new, empty record in the process thread list.
+        WIN32_LIFETIME       lifetime;
+        WIN32_THREAD_INFO thread_info;
+        thread_info.ThreadId = tid;
+        thread_info.EntryAddress = entry;
+        thread_info.EntryPointName = NULL;
+        InitObjectLifetime(&lifetime, time);
+        thread_index = process->ThreadCount++;
+        process->ThreadId.push_back(pid);
+        process->ThreadLifetime.push_back(lifetime);
+        process->ThreadInfo.push_back(thread_info);
+        return thread_index;
     }
 }
 
@@ -407,11 +462,11 @@ FindOrCreateImage
         image_info.ImagePath = path;
         InitObjectLifetime(&lifetime, time);
         image_index = process->ImageCount++;
-        process->.push_back(pid);
-        rtev->ProcessList.ProcessHash.push_back(0);
-        rtev->ProcessList.ProcessLifetime.push_back(lifetime);
-        retv->ProcessList.ProcessInfo.push_back(process_info);
-        return process_index;
+        process->ImageBaseAddress.push_back(addr);
+        process->ImagePathHash.push_back(image_hash);
+        process->ImageLifetime.push_back(lifetime);
+        process->ImageInfo.push_back(image_info);
+        return image_index;
     }
 }
 
@@ -613,7 +668,159 @@ IsTaskProfilerTaskTransitionEvent
     return IsEqualGUID(info_buf->EventGuid, TaskStateTransitionEventGuid) != FALSE;
 }
 
-public_function void
+/// @summary Decode the information from an event of type Process_TypeGroup1 and create or update a WIN32_PROCESS_INFO instance.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa364095(v=vs.85).aspx.
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return A pointer to the WIN32_PROCESS_INFO record that was updated.
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_Process_TypeGroup1_Create
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 1);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    WCHAR              *process_path = TraceEventGetWideStr(ev, info_buf, 7);
+    uint32_t const      process_hash = HashWideString(process_path);
+    process_info->Executable         = process_path;
+    rtev->ProcessHash[process_ix]    = HashWideString(process_path);
+    return process_info;
+}
+
+/// @summary Decode the information from an event of type Process_TypeGroup1 and update a WIN32_PROCESS_INFO instance.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa364095(v=vs.85).aspx.
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return A pointer to the WIN32_PROCESS_INFO record that was updated.
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_Process_TypeGroup1_Terminate
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 1);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = 0;
+    if (FindProcessByPid(rtev, process_id, timestamp, process_ix))
+    {   // update the lifetime of the process record.
+        retv->ProcessList.ProcessLifetime[process_ix].DestroyTime = timestamp;
+        return &rtev->ProcessList.ProcessInfo[process_ix];
+    }
+    else
+    {   // the process ID doesn't match any known process.
+        return NULL;
+    }
+}
+
+/// @summary Decode the information from an event of type Image_Load and create or update the image list of a WIN32_PROCESS_INFO instance.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process into which the executable image was loaded.
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_ImageLoad_Load
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    WCHAR                *image_path = TraceEventGetWideStr(ev, info_buf, 11);
+    uint32_t const        image_base = TraceEventGetUInt32(ev, info_buf, 0);
+    size_t   const          image_ix = FindOrCreateImage(process_info, image_path, image_base, timestamp);
+    UNREFERENCED_PARAMETER (image_ix);
+    return process_info;
+}
+
+/// @summary Decode the information from an event of type Image_Load, representing an executable image being unloaded from the process address space.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process from which the executable image was unloaded.
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_ImageLoad_Unload
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    uint32_t const        image_base = TraceEventGetUInt32(ev, info_buf, 0);
+    size_t                  image_ix = 0;
+
+    if (FindImageByBaseAddress(process_info, image_base, timestamp, image_ix))
+    {   // update the lifetime of the image record.
+        process_info->ImageLifetime[image_ix].DestroyTime = timestamp;
+    }
+    return process_info;
+}
+
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_Thread_V2_TypeGroup1_Create
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 0);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    uint32_t const         thread_id = TraceEventGetUInt32(ev, info_buf, 1);
+}
+
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_Thread_V2_TypeGroup1_Terminate
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+}
+
+public_function WIN32_PROCESS_INFO*
+ConsumeKernel_Thread_ReadyThread
+(
+    WIN32_PROFILER_EVENTS      *rtev, 
+    TRACE_EVENT_INFO       *info_buf, 
+    ULONG                  info_size, 
+    EVENT_RECORD                 *ev
+)
+{
+}
+
+public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Thread_CSwitch
 (
     WIN32_PROFILER_EVENTS      *rtev, 
@@ -648,55 +855,6 @@ ConsumeKernel_Thread_CSwitch
     }
 }
 
-/// @summary Decode the information from an event of type Process_TypeGroup1 and create or update a WIN32_PROCESS_INFO instance.
-/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa364095(v=vs.85).aspx.
-/// @param rtev The profiler events record to update.
-/// @param info_buf Metadata associated with the process event.
-/// @param info_size The size of the metadata associated with the process event.
-/// @param ev The kernel trace event to process.
-/// @param terminate Specify true if the event specifies a process termination, or false if it indicates a process launch.
-/// @return A pointer to the WIN32_PROCESS_INFO record that was updated.
-public_function WIN32_PROCESS_INFO*
-ConsumeKernel_Process_TypeGroup1
-(
-    WIN32_PROFILER_EVENTS      *rtev, 
-    TRACE_EVENT_INFO       *info_buf, 
-    ULONG                  info_size, 
-    EVENT_RECORD                 *ev, 
-    bool                   terminate
-)
-{
-}
-
-public_function WIN32_PROCESS_INFO*
-ConsumeKernel_ImageLoad_Load
-(
-    WIN32_PROFILER_EVENTS      *rtev, 
-    TRACE_EVENT_INFO       *info_buf, 
-    ULONG                  info_size, 
-    EVENT_RECORD                 *ev
-)
-{   // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
-    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
-    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
-    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
-    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
-    size_t   const          image_ix = process_info->ImageCount++;
-    WCHAR                *image_path = TraceEventGetWideStr(ev, info_buf, 11);
-    uint32_t              image_hash = HashWideString(image_path);
-}
-
-public_function WIN32_PROCESS_INFO*
-ConsumeKernel_ImageLoad_Unload
-(
-    WIN32_PROFILER_EVENTS      *rtev, 
-    TRACE_EVENT_INFO       *info_buf, 
-    ULONG                  info_size, 
-    EVENT_RECORD                 *ev
-)
-{
-}
-
 // Other ConsumePROVIDER_EVENT functions here
 // ... 
 
@@ -717,10 +875,12 @@ FilterKernelProcessEvent
     if (info_buf->EventDescriptor.Opcode == 1 || info_buf->EventDescriptor.Opcode == 3)
     {   // information about a process that was just started, or was running when the trace started.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364095(v=vs.85).aspx
+        ConsumeKernel_Process_TypeGroup1_Create(rtev, info_buf, info_size, ev);
     }
     if (info_buf->EventDescriptor.Opcode == 2)
     {   // information about a process that terminated while the trace was running.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364095(v=vs.85).aspx
+        ConsumeKernel_Process_TypeGroup1_Terminate(rtev, info_buf, info_size, ev);
     }
 }
 
@@ -773,10 +933,12 @@ FilterKernelImageLoadEvent
     if (info_buf->EventDescriptor.Opcode == 3 || info_buf->EventDescriptor.Opcode == 10)
     {   // information about an image that was just loaded, or was loaded before the trace started. 
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+        ConsumeKernel_ImageLoad_Load(rtev, info_buf, info_size, ev);
     }
     if (info_buf->EventDescriptor.Opcode == 2)
     {   // information about an image that was just unloaded.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa364070%28v=vs.85%29.aspx
+        ConsumeKernel_ImageLoad_Unload(rtev, info_buf, info_size, ev);
     }
 }
 
@@ -785,7 +947,7 @@ FilterKernelImageLoadEvent
 /// @param info_buf Metadata associated with the trace event.
 /// @param info_size The size of the metadata associated with the trace event, in bytes.
 /// @param ev The trace event record.
-internal_funfction void
+internal_function void
 FilterKernelProviderEvent
 (
     WIN32_PROFILER_EVENTS      *rtev, 
@@ -805,7 +967,7 @@ FilterKernelProviderEvent
 /// @param info_buf Metadata associated with the trace event.
 /// @param info_size The size of the metadata associated with the trace event, in bytes.
 /// @param ev The trace event record.
-internal_funfction void
+internal_function void
 FilterTaskProfilerEvent
 (
     WIN32_PROFILER_EVENTS      *rtev, 
