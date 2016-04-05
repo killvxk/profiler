@@ -133,7 +133,7 @@ EventTimeToNanoseconds
 )
 {
     uint64_t  timestamp = uint64_t(ev->EventHeader.TimeStamp.QuadPart);
-    uint32_t clock_freq = uint64_t(frequency.QuadPart);
+    uint64_t clock_freq = uint64_t(frequency.QuadPart);
     return (1000000000ULL * timestamp) / clock_freq;
 }
 
@@ -261,6 +261,39 @@ FindObjectByU32AndTime
     return false;
 }
 
+/// @summary Search an object list (process, thread, etc.) for an object with a given identifier that was alive at a particular time.
+/// @param key_list The list of object identifiers to search. The list may contain duplicates.
+/// @param lifetime_list The list of object lifetimes corresponding to each identifier.
+/// @param object_count The number of values in the key and lifetime lists.
+/// @param search_key The identifier of the object to locate.
+/// @param search_time The query time, in nanoseconds. The object must be alive at this time.
+/// @param object_index If the function returns true, this value is set to the zero-based index of the object in the object list.
+/// @return true if an object with the specified identifier was alive and located at the specified time, or false otherwise.
+public_function bool
+FindObjectByU64AndTime
+(
+    uint64_t       const      *key_list,
+    WIN32_LIFETIME const *lifetime_list, 
+    size_t         const   object_count,
+    uint64_t                 search_key, 
+    uint64_t                search_time, 
+    size_t                &object_index
+)
+{
+    for (size_t i = 0; i < object_count; ++i)
+    {
+        if (key_list[i] == search_key)
+        {   // found a key match, check lifetime.
+            if (ObjectAliveAtTime(lifetime_list[i], search_time))
+            {   // the object was also alive, so we have a match.
+                object_index = i;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// @summary Search the process list of a profiler events list for a system process identifier.
 /// @param rtev The runtime profiler events record.
 /// @param pid The process identifier to search for.
@@ -278,7 +311,7 @@ FindProcessByPid
 {
     uint32_t       const       *key_list = &rtev->ProcessList.ProcessId[0];
     WIN32_LIFETIME const  *lifetime_list = &rtev->ProcessList.ProcessLifetime[0];
-    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessCount, pid, time, index);
+    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessList.ProcessCount, pid, time, index);
 }
 
 /// @summary Search the process list of a profiler events list for a process identified by path.
@@ -298,7 +331,7 @@ FindProcessByName
 {
     uint32_t       const       *key_list = &rtev->ProcessList.ProcessHash[0];
     WIN32_LIFETIME const  *lifetime_list = &rtev->ProcessList.ProcessLifetime[0];
-    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessCount, hash, time, index);
+    return FindObjectByU32AndTime(key_list, lifetime_list, rtev->ProcessList.ProcessCount, hash, time, index);
 }
 
 /// @summary Find a process record for the process with the specified identifier. Create a new record if no existing record is found. 
@@ -328,12 +361,12 @@ FindOrCreateProcess
         process_info.Executable   = NULL;
         process_info.ThreadCount  = 0;
         process_info.ImageCount   = 0;
-        InitObjectLifetime(&lifetime, time);
+        InitObjectLifetime(lifetime, time);
         process_index = rtev->ProcessList.ProcessCount++;
         rtev->ProcessList.ProcessId.push_back(pid);
         rtev->ProcessList.ProcessHash.push_back(0);
         rtev->ProcessList.ProcessLifetime.push_back(lifetime);
-        retv->ProcessList.ProcessInfo.push_back(process_info);
+        rtev->ProcessList.ProcessInfo.push_back(process_info);
         return process_index;
     }
 }
@@ -369,12 +402,12 @@ FindOrCreateThread
 (
     WIN32_PROCESS_INFO *process, 
     uint32_t                tid,
-    uint32_t              entry, 
+    uint64_t              entry, 
     uint64_t               time
 )
 {
     size_t thread_index;
-    if (FindThreadById(process, tid, time, thread_index))
+    if (FindThreadByTid(process, tid, time, thread_index))
     {   // return the index of the existing record.
         return thread_index;
     }
@@ -382,12 +415,15 @@ FindOrCreateThread
     {   // insert a new, empty record in the process thread list.
         WIN32_LIFETIME       lifetime;
         WIN32_THREAD_INFO thread_info;
-        thread_info.ThreadId = tid;
-        thread_info.EntryAddress = entry;
-        thread_info.EntryPointName = NULL;
-        InitObjectLifetime(&lifetime, time);
+        thread_info.ThreadId        = tid;
+        thread_info.EntryAddress    = entry;
+        thread_info.EntryPointName  = NULL;
+        thread_info.ReadyCount      = 0;
+        thread_info.SwitchInCount   = 0;
+        thread_info.SwitchOutCount  = 0;
+        InitObjectLifetime(lifetime, time);
         thread_index = process->ThreadCount++;
-        process->ThreadId.push_back(pid);
+        process->ThreadId.push_back(tid);
         process->ThreadLifetime.push_back(lifetime);
         process->ThreadInfo.push_back(thread_info);
         return thread_index;
@@ -409,7 +445,7 @@ FindImageByName
     size_t               &index
 )
 {
-    uint32_t       const      *key_list  = &process->ImageHash[0];
+    uint32_t       const      *key_list  = &process->ImagePathHash[0];
     WIN32_LIFETIME const *lifetime_list  = &process->ImageLifetime[0];
     return FindObjectByU32AndTime(key_list, lifetime_list, process->ImageCount, hash, time, index);
 }
@@ -424,14 +460,14 @@ public_function bool
 FindImageByBaseAddress
 (
     WIN32_PROCESS_INFO *process, 
-    uint32_t               addr, 
+    uint64_t               addr, 
     uint64_t               time, 
     size_t               &index
 )
 {
-    uint32_t       const      *key_list = &process->ImageBaseAddress[0];
+    uint64_t       const      *key_list = &process->ImageBaseAddress[0];
     WIN32_LIFETIME const *lifetime_list = &process->ImageLifetime[0];
-    return FindObjectByU32AndTime(key_list, lifetime_list, process->ImageCount, addr, time, index);
+    return FindObjectByU64AndTime(key_list, lifetime_list, process->ImageCount, addr, time, index);
 }
 
 /// @summary Find an executable image record for the image with the specified attributes. Create a new record if no existing record is found. 
@@ -445,13 +481,13 @@ FindOrCreateImage
 (
     WIN32_PROCESS_INFO *process, 
     WCHAR                 *path,
-    uint32_t               addr, 
+    uint64_t               addr, 
     uint64_t               time
 )
 {
     size_t   image_index;
     uint32_t const  image_hash = HashWideString(path);
-    if (FindImageByName(process, hash, time, image_index))
+    if (FindImageByName(process, image_hash, time, image_index))
     {   // return the index of the existing record.
         return image_index;
     }
@@ -460,7 +496,7 @@ FindOrCreateImage
         WIN32_LIFETIME     lifetime;
         WIN32_IMAGE_INFO image_info;
         image_info.ImagePath = path;
-        InitObjectLifetime(&lifetime, time);
+        InitObjectLifetime(lifetime, time);
         image_index = process->ImageCount++;
         process->ImageBaseAddress.push_back(addr);
         process->ImagePathHash.push_back(image_hash);
@@ -468,6 +504,31 @@ FindOrCreateImage
         process->ImageInfo.push_back(image_info);
         return image_index;
     }
+}
+
+/// @summary Retrieve a pointer-size unsigned integer property value from an event record.
+/// @param ev The EVENT_RECORD passed to TaskProfilerRecordEvent.
+/// @param info_buf The TRACE_EVENT_INFO containing event metadata.
+/// @param index The zero-based index of the property to retrieve.
+/// @return The pointer-size integer value, stored in a 64-bit unsigned integer.
+public_function uint64_t
+TraceEventGetPointer
+(
+    EVENT_RECORD           *ev, 
+    TRACE_EVENT_INFO *info_buf, 
+    size_t               index
+)
+{
+    PROPERTY_DATA_DESCRIPTOR  dd;
+    DWORD  pdata[2] = {0, 0}; // high DWORD, low DWORD
+    ULONG     psize =  8;     // assume 64-bit these days.
+    dd.PropertyName = (ULONGLONG)((uint8_t*) info_buf + info_buf->EventPropertyInfoArray[index].NameOffset);
+    dd.ArrayIndex   =  ULONG_MAX;
+    dd.Reserved     =  0;
+    if (ev->EventHeader.Flags & EVENT_HEADER_FLAG_32_BIT_HEADER)   psize = 4;
+    if (ev->EventHeader.Flags & EVENT_HEADER_FLAG_64_BIT_HEADER)   psize = 8;
+    TdhGetProperty(ev, 0, NULL, 1, &dd, psize, (PBYTE) pdata);
+    return  ((uint64_t(pdata[0]) << 32) | uint64_t(pdata[1]));
 }
 
 /// @summary Retrieve a 32-bit unsigned integer property value from an event record.
@@ -690,8 +751,9 @@ ConsumeKernel_Process_TypeGroup1_Create
     WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
     WCHAR              *process_path = TraceEventGetWideStr(ev, info_buf, 7);
     uint32_t const      process_hash = HashWideString(process_path);
-    process_info->Executable         = process_path;
-    rtev->ProcessHash[process_ix]    = HashWideString(process_path);
+    rtev->ProcessList.ProcessHash[process_ix] = process_hash;
+    process_info->Executable = process_path;
+    UNREFERENCED_PARAMETER(info_size);
     return process_info;
 }
 
@@ -710,13 +772,13 @@ ConsumeKernel_Process_TypeGroup1_Terminate
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
-    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 1);
-    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
-    size_t   const        process_ix = 0;
+{   UNREFERENCED_PARAMETER(info_size);
+    uint32_t const process_id  = TraceEventGetUInt32(ev, info_buf, 1);
+    uint64_t const  timestamp  = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t         process_ix  = 0;
     if (FindProcessByPid(rtev, process_id, timestamp, process_ix))
     {   // update the lifetime of the process record.
-        retv->ProcessList.ProcessLifetime[process_ix].DestroyTime = timestamp;
+        rtev->ProcessList.ProcessLifetime[process_ix].DestroyTime = timestamp;
         return &rtev->ProcessList.ProcessInfo[process_ix];
     }
     else
@@ -740,13 +802,13 @@ ConsumeKernel_ImageLoad_Load
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
+{   UNREFERENCED_PARAMETER(info_size);
     uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
     uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
     size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
     WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
     WCHAR                *image_path = TraceEventGetWideStr(ev, info_buf, 11);
-    uint32_t const        image_base = TraceEventGetUInt32(ev, info_buf, 0);
+    uint64_t const        image_base = TraceEventGetPointer(ev, info_buf, 0);
     size_t   const          image_ix = FindOrCreateImage(process_info, image_path, image_base, timestamp);
     UNREFERENCED_PARAMETER (image_ix);
     return process_info;
@@ -767,12 +829,12 @@ ConsumeKernel_ImageLoad_Unload
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
+{   UNREFERENCED_PARAMETER(info_size);
     uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 2);
     uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
     size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
     WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
-    uint32_t const        image_base = TraceEventGetUInt32(ev, info_buf, 0);
+    uint64_t const        image_base = TraceEventGetPointer(ev, info_buf, 0);
     size_t                  image_ix = 0;
 
     if (FindImageByBaseAddress(process_info, image_base, timestamp, image_ix))
@@ -782,6 +844,13 @@ ConsumeKernel_ImageLoad_Unload
     return process_info;
 }
 
+/// @summary Decode the information from an event of type Thread_V2 specifying the creation of a thread within a process and create or update the thread list of a WIN32_PROCESS_INFO instance.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/dd765166%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process that created the thread.
 public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Thread_V2_TypeGroup1_Create
 (
@@ -790,14 +859,25 @@ ConsumeKernel_Thread_V2_TypeGroup1_Create
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
+{   UNREFERENCED_PARAMETER(info_size);
     uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 0);
     uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
     size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
     WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
-    uint32_t const         thread_id = TraceEventGetUInt32(ev, info_buf, 1);
+    uint32_t const         thread_id = TraceEventGetUInt32 (ev, info_buf, 1);
+    uint64_t const        entry_addr = TraceEventGetPointer(ev, info_buf, 7);
+    size_t   const         thread_ix = FindOrCreateThread(process_info, thread_id, entry_addr, timestamp);
+    UNREFERENCED_PARAMETER(thread_ix);
+    return process_info;
 }
 
+/// @summary Decode the information from an event of type Thread_V2 specifying the termination of a thread within a process.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/dd765166%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process that created the thread.
 public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Thread_V2_TypeGroup1_Terminate
 (
@@ -806,9 +886,28 @@ ConsumeKernel_Thread_V2_TypeGroup1_Terminate
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
+{   UNREFERENCED_PARAMETER(info_size);
+    uint32_t const        process_id = TraceEventGetUInt32(ev, info_buf, 0);
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    uint32_t const         thread_id = TraceEventGetUInt32 (ev, info_buf, 1);
+    size_t                 thread_ix = 0;
+    
+    if (FindThreadByTid(process_info, thread_id, timestamp, thread_ix))
+    {   // update the lifetime of the thread record.
+        process_info->ThreadLifetime[thread_ix].DestroyTime = timestamp;
+    }
+    return process_info;
 }
 
+/// @summary Decode the information from an event of type ReadyThread indicating when the scheduler transitions a thread to the ready-to-run state.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/dd765158%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process that created the thread.
 public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Thread_ReadyThread
 (
@@ -817,9 +916,30 @@ ConsumeKernel_Thread_ReadyThread
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
+{   UNREFERENCED_PARAMETER(info_size);
+    uint32_t const        process_id = ev->EventHeader.ProcessId;
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    uint32_t const         thread_id = TraceEventGetUInt32(ev, info_buf, 0);
+    size_t                 thread_ix = 0;
+
+    if (FindThreadByTid(process_info, thread_id, timestamp, thread_ix))
+    {   // push the ready event onto the back of the list.
+        WIN32_THREAD_INFO *thread_info = &process_info->ThreadInfo[thread_ix];
+        thread_info->ReadyTimes.push_back(timestamp);
+        thread_info->ReadyCount++;
+    }
+    return process_info;
 }
 
+/// @summary Decode the information from an event of type CSwitch representing a context switch.
+/// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa964744%28v=vs.85%29.aspx
+/// @param rtev The profiler events record to update.
+/// @param info_buf Metadata associated with the process event.
+/// @param info_size The size of the metadata associated with the process event.
+/// @param ev The kernel trace event to process.
+/// @return The WIN32_PROCESS_INFO associated with the process that created the thread.
 public_function WIN32_PROCESS_INFO*
 ConsumeKernel_Thread_CSwitch
 (
@@ -828,31 +948,40 @@ ConsumeKernel_Thread_CSwitch
     ULONG                  info_size, 
     EVENT_RECORD                 *ev
 )
-{
-    // this involves some ridiculous parsing of data in an opaque buffer.
-    // there are some complications with context switch events:
-    // 1. we probably don't know what the 'profiled' process and thread IDs are yet.
-    //    - this means that all of the event info needs to be buffered.
-    // 2. the ProcessId and ThreadId values in the event header are not valid.
-    //    - need to look at Opcode 1,2,3,4 to retrieve thread start/stop information.
-    // 
-    if (IsEqualGUID(info_buf->ProviderGuid, SystemTraceControlGuid) && 
-        IsEqualGUID(info_buf->EventGuid   , KernelThreadEventGuid)  && 
-        info_buf->EventDescriptor.Opcode == 36)
-    {   // opcode 36 corresponds to a CSwitch event.
-        // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa964744%28v=vs.85%29.aspx
-        // all context switch event handling occurs on the same thread.
-        WIN32_CONTEXT_SWITCH              cswitch;
-        cswitch.CurrThreadId            = ProfilerGetUInt32(ev, info_buf,  0); // NewThreadId
-        cswitch.PrevThreadId            = ProfilerGetUInt32(ev, info_buf,  1); // OldThreadId
-        cswitch.WaitTimeMs              = ProfilerGetUInt32(ev, info_buf, 10); // NewThreadWaitTime
-        cswitch.WaitReason              = ProfilerGetSInt8 (ev, info_buf,  6); // OldThreadWaitReason
-        cswitch.WaitMode                = ProfilerGetSInt8 (ev, info_buf,  7); // OldThreadWaitMode
-        cswitch.PrevThreadPriority      = ProfilerGetSInt8 (ev, info_buf,  3); // OldThreadPriority
-        cswitch.CurrThreadPriority      = ProfilerGetSInt8 (ev, info_buf,  2); // NewThreadPriority
-        profiler->CSwitchTime.push_back(uint64_t(ev->EventHeader.TimeStamp.QuadPart));
-        profiler->CSwitchData.push_back(cswitch);
+{   UNREFERENCED_PARAMETER(info_size);
+    uint32_t const        process_id = ev->EventHeader.ProcessId;
+    uint64_t const         timestamp = EventTimeToNanoseconds(ev, rtev->ClockFrequency);
+    size_t   const        process_ix = FindOrCreateProcess(rtev, process_id, timestamp);
+    WIN32_PROCESS_INFO *process_info =&rtev->ProcessList.ProcessInfo[process_ix];
+    uint32_t const     new_thread_id = TraceEventGetUInt32(ev, info_buf, 0);
+    uint32_t const     old_thread_id = TraceEventGetUInt32(ev, info_buf, 1);
+    size_t                 thread_ix = 0;
+
+    if (new_thread_id != 0 && FindThreadByTid(process_info, new_thread_id, timestamp, thread_ix))
+    {   // the thread is being switched in.
+        WIN32_THREAD_INFO *thread_info = &process_info->ThreadInfo[thread_ix];
+        WIN32_SWITCH_IN_DATA      data;
+        data.WaitTime  = TraceEventGetUInt32(ev, info_buf, 10); // NewThreadWaitTime
+        data.Processor = TraceEventGetSInt8 (ev, info_buf,  9); // OldThreadWaitIdealProcessor
+        data.Priority  = TraceEventGetSInt8 (ev, info_buf,  2); // NewThreadPriority
+        thread_info->SwitchInTime.push_back(timestamp);
+        thread_info->SwitchInData.push_back(data);
+        thread_info->SwitchInCount++;
     }
+    if (old_thread_id != 0 && FindThreadByTid(process_info, old_thread_id, timestamp, thread_ix))
+    {   // the thread is being switched out.
+        WIN32_THREAD_INFO *thread_info = &process_info->ThreadInfo[thread_ix];
+        WIN32_SWITCH_OUT_DATA     data;
+        data.Processor  = TraceEventGetSInt8(ev, info_buf, 9); // OldThreadWaitIdealProcessor
+        data.State      = TraceEventGetSInt8(ev, info_buf, 8); // OldThreadState
+        data.WaitReason = TraceEventGetSInt8(ev, info_buf, 6); // OldThreadWaitReason
+        data.WaitMode   = TraceEventGetSInt8(ev, info_buf, 7); // OldThreadWaitMode
+        data.Priority   = TraceEventGetSInt8(ev, info_buf, 3); // OldThreadPriority
+        thread_info->SwitchOutTime.push_back(timestamp);
+        thread_info->SwitchOutData.push_back(data);
+        thread_info->SwitchOutCount++;
+    }
+    return process_info;
 }
 
 // Other ConsumePROVIDER_EVENT functions here
@@ -901,18 +1030,22 @@ FilterKernelThreadEvent
     if (info_buf->EventDescriptor.Opcode == 50)
     {   // a ready thread event. very high frequency.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/dd765158%28v=vs.85%29.aspx
+        ConsumeKernel_Thread_ReadyThread(rtev, info_buf, info_size, ev);
     }
     if (info_buf->EventDescriptor.Opcode == 36)
     {   // a context switch event. very high frequency.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/aa964744(v=vs.85).aspx
+        ConsumeKernel_Thread_CSwitch(rtev, info_buf, info_size, ev);
     }
     if (info_buf->EventDescriptor.Opcode ==  1 || info_buf->EventDescriptor.Opcode == 3)
     {   // information about a thread that was just started, or was running when the trace started.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/dd765166(v=vs.85).aspx
+        ConsumeKernel_Thread_V2_TypeGroup1_Create(rtev, info_buf, info_size, ev);
     }
     if (info_buf->EventDescriptor.Opcode == 2)
     {   // information about a thread that terminated while the trace was running.
         // see https://msdn.microsoft.com/en-us/library/windows/desktop/dd765166(v=vs.85).aspx
+        ConsumeKernel_Thread_V2_TypeGroup1_Terminate(rtev, info_buf, info_size, ev);
     }
 }
 
@@ -978,6 +1111,10 @@ FilterTaskProfilerEvent
 {   // the following statements are ordered by event frequency, highest to lowest.
     // ...
     // else, the profiler doesn't currently care about this class of task profiler event.
+    UNREFERENCED_PARAMETER(rtev);
+    UNREFERENCED_PARAMETER(info_buf);
+    UNREFERENCED_PARAMETER(info_size);
+    UNREFERENCED_PARAMETER(ev);
 }
 
 /// @summary Callback invoked for each event reported by Event Tracing for Windows.
@@ -1090,18 +1227,15 @@ NewProfilerEvents
 
     // TODO(rlk): might want to move to a memory arena system based around VirtualAlloc.
     // this would provide better performance and probably lead to less memory waste.
-    ev->EventBuffer      =(uint8_t*) malloc(64 * 1024); // 64KB
-    ev->EventBufferSize  = 64 * 1024;
-    ev->ConsumerHandle   = trace;
-    ev->ConsumerThread   = thread;
-    ev->ConsumerThreadId = tid;
-    ev->TimerResolution  =(uint64_t) logfile.LogfileHeader.TimerResolution;
-    ev->ClockFrequency   = logfile.LogfileHeader.PerfFreq;
-
-    // initialize the storage for the context switch track. context switch events
-    // occur at an extremely high frequency (10000+/core/second).
-    ev->CSwitchTime.clear(); ev->CSwitchTime.reserve(1000000);
-    ev->CSwitchData.clear(); ev->CSwitchData.reserve(1000000);
+    ev->EventBuffer              =(uint8_t*) malloc(64 * 1024); // 64KB
+    ev->EventBufferSize          = 64 * 1024;
+    ev->ConsumerHandle           = trace;
+    ev->ConsumerThread           = thread;
+    ev->ConsumerThreadId         = tid;
+    ev->PointerSize              =(size_t  ) logfile.LogfileHeader.PointerSize;
+    ev->TimerResolution          =(uint64_t) logfile.LogfileHeader.TimerResolution;
+    ev->ClockFrequency           = logfile.LogfileHeader.PerfFreq;
+    ev->ProcessList.ProcessCount = 0;
 
     // TODO(rlk): initialize other event data containers here.
     // ...
