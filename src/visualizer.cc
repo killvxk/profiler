@@ -81,6 +81,9 @@
 
 #include "trace_loader.cc"
 
+#include "imgui.cpp"
+#include "imgui_draw.cpp"
+
 /*//////////////////
 //   Data Types   //
 //////////////////*/
