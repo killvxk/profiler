@@ -83,6 +83,8 @@
 
 #include "imgui.cpp"
 #include "imgui_draw.cpp"
+#include "imgui_demo.cpp"
+#include "imgui_impl_glfw.cpp"
 
 /*//////////////////
 //   Data Types   //
@@ -299,116 +301,18 @@ CreateConsoleAndRedirectStdio
     }
 }
 
-/// @summary Implements the WndProc for the main game window.
-/// @param window The window receiving the message.
-/// @param message The message identifier.
-/// @param wparam Additional message-specific data.
-/// @param lparam Additional message-specific data.
-/// @return The message-specific result code.
-internal_function LRESULT CALLBACK
-MainWindowCallback
+/// @summary 
+/// @param error
+/// @param description
+internal_function void
+GlfwErrorCallback
 (
-    HWND    window, 
-    UINT   message, 
-    WPARAM  wparam, 
-    LPARAM  lparam
-)
-{   // WM_NCCREATE performs special handling to store the WIN32_DISPLAY_THREAD_ARGS pointer in the window data.
-    // the handler for WM_NCCREATE executes before the call to CreateWindowEx returns in CreateWindowOnDisplay.
-    if (message == WM_NCCREATE)
-    {   // store the WIN32_DISPLAY_THREAD_ARGS in the window user data.
-        CREATESTRUCT *cs = (CREATESTRUCT*) lparam;
-        SetWindowLongPtr(window, GWLP_USERDATA, (LONG_PTR) cs->lpCreateParams);
-        return DefWindowProc(window, message, wparam, lparam);
-    }
-
-    // this WndProc may receive several messages before receiving WM_NCCREATE.
-    // if the user data hasn't been set yet, pass through to the default handler.
-    /*WIN32_DISPLAY_THREAD_ARGS *thread_args = (WIN32_DISPLAY_THREAD_ARGS*) GetWindowLongPtr(window, GWLP_USERDATA);
-    if (thread_args == NULL)
-    {   // let the default implementation handle the message.
-        return DefWindowProc(window, message, wparam, lparam);
-    }*/
-
-    // process all other messages sent (or posted) to the window.
-    LRESULT result = 0;
-    switch (message)
-    {
-        case WM_ACTIVATE:
-            {   // wparam is TRUE if the window is being activated, or FALSE if the window is being deactivated. 
-            } break;
-
-        case WM_CLOSE:
-            {   // completely destroy the main window. a WM_DESTROY message is 
-                // posted that in turn causes the WM_QUIT message to be posted.
-                DestroyWindow(window);
-            } break;
-
-        case WM_DESTROY:
-            {   // post the WM_QUIT message to be picked up in the main loop.
-                PostQuitMessage(0);
-            } break;
-
-        default:
-            {   // pass the message to the default handler.
-                result = DefWindowProc(window, message, wparam, lparam);
-            } break;
-    }
-    return result;
-}
-
-/// @summary Create a new window on a given display.
-/// @param this_instance The HINSTANCE of the application (passed to WinMain) or GetModuleHandle(NULL).
-/// @param width The width of the window, or 0 to use the entire width of the display.
-/// @param height The height of the window, or 0 to use the entire height of the display.
-/// @return The handle of the new window, or NULL.
-internal_function HWND
-CreateMainWindow
-(
-    HINSTANCE this_instance,
-    void       *thread_args,
-    int               width=CW_USEDEFAULT, 
-    int              height=CW_USEDEFAULT
+    int               error, 
+    char const *description
 )
 {
-    TCHAR const *class_name = _T("ProfViz_WndClass");
-    WNDCLASSEX     wndclass = {};
-
-    // register the window class, if necessary.
-    if (!GetClassInfoEx(this_instance, class_name, &wndclass))
-    {   // the window class hasn't been registered yet.
-        wndclass.cbSize         = sizeof(WNDCLASSEX);
-        wndclass.cbClsExtra     = 0;
-        wndclass.cbWndExtra     = sizeof(void*);
-        wndclass.hInstance      = this_instance;
-        wndclass.lpszClassName  = class_name;
-        wndclass.lpszMenuName   = NULL;
-        wndclass.lpfnWndProc    = MainWindowCallback;
-        wndclass.hIcon          = LoadIcon  (0, IDI_APPLICATION);
-        wndclass.hIconSm        = LoadIcon  (0, IDI_APPLICATION);
-        wndclass.hCursor        = LoadCursor(0, IDC_ARROW);
-        wndclass.style          = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
-        wndclass.hbrBackground  = NULL;
-        if (!RegisterClassEx(&wndclass))
-        {   // unable to register the window class, cannot proceed.
-            return NULL;
-        }
-    }
-
-    // create a new window (not yet visible) at location (0, 0) on the display.
-    int   x        = CW_USEDEFAULT;
-    int   y        = CW_USEDEFAULT;
-    DWORD style_ex = 0;
-    DWORD style    =(WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME) | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    TCHAR*title    =_T("Profile Visualizer");
-    HWND  hwnd     = CreateWindowEx(style_ex, class_name, title, style, x, y, width, height, NULL, NULL, this_instance, thread_args);
-    if   (hwnd  == NULL)
-    {   // the window cannot be created.
-        return NULL;
-    }
-
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
-    return hwnd;
+    UNREFERENCED_PARAMETER(error);
+    UNREFERENCED_PARAMETER(description);
 }
 
 /*////////////////////////
@@ -431,8 +335,7 @@ WinMain
 {
     WIN32_PROFILER_EVENTS events;
     COMMAND_LINE            argv;
-    HWND             main_window;
-    bool           keep_running = true;
+    GLFWwindow     *main_window = NULL;
 
     UNREFERENCED_PARAMETER(this_instance);
     UNREFERENCED_PARAMETER(prev_instance);
@@ -442,14 +345,20 @@ WinMain
     if (!ParseCommandLine(&argv))
     {   // bail out if the command line cannot be parsed successfully.
         DebugPrintf(_T("ERROR: Unable to parse the command line.\n"));
-        return 0;
+        return 1;
     }
-    if ((main_window = CreateMainWindow(this_instance, NULL)) == NULL)
-    {   // bail out if the main window cannot be created.
-        DebugPrintf(_T("ERROR: Unable to create the main application window.\n"));
-        return 0;
+    glfwSetErrorCallback(GlfwErrorCallback);
+    if (!glfwInit())
+    {   // GlfwErrorCallback will have printed additional error information.
+        return 1;
     }
+    if ((main_window = glfwCreateWindow(1280, 720, "Thread Profile Visualizer", NULL, NULL)) == NULL)
+    {   // GlfwErrorCallback will have printed additional error information.
+        return 1;
+    }
+    glfwMakeContextCurrent(main_window);
     CreateConsoleAndRedirectStdio();
+    ImGui_ImplGlfw_Init(main_window, true);
 
     // test test load a trace file
     if (argv.TraceFile != NULL)
@@ -458,38 +367,61 @@ WinMain
     }
 
     // run the main thread loop.
-    while (keep_running)
-    {   
-        MSG msg;
+    bool show_test_window = true;
+    bool show_another_window = false;
+    ImVec4 clear_color = ImColor(114, 144, 154);
 
-        // dispatch windows messages while messages are available.
-        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+    // Main loop
+    while (!glfwWindowShouldClose(main_window))
+    {
+        glfwPollEvents();
+        ImGui_ImplGlfw_NewFrame();
+
+        // 1. Show a simple window
+        // Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appears in a window automatically called "Debug"
         {
-            if (msg.message != WM_QUIT)
-            {   // dispatch the message to MainWindowCallback.
-                TranslateMessage(&msg);
-                DispatchMessage (&msg);
-            }
-            else
-            {   // terminate the main loop because the window was closed.
-                keep_running = false;
-                break;
-            }
+            static float f = 0.0f;
+            ImGui::Text("Hello, world!");
+            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);
+            ImGui::ColorEdit3("clear color", (float*)&clear_color);
+            if (ImGui::Button("Test Window")) show_test_window ^= 1;
+            if (ImGui::Button("Another Window")) show_another_window ^= 1;
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
         }
 
-        if (!keep_running)
-        {   // the render thread has been instructed to terminate.
-            break;
+        // 2. Show another simple window, this time using an explicit Begin/End pair
+        if (show_another_window)
+        {
+            ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
+            ImGui::Begin("Another Window", &show_another_window);
+            ImGui::Text("Hello");
+            ImGui::End();
         }
 
-        // TODO(rlk): Present the backbuffer
-        Sleep(16);
+        // 3. Show the ImGui test window. Most of the sample code is in ImGui::ShowTestWindow()
+        if (show_test_window)
+        {
+            ImGui::SetNextWindowPos(ImVec2(650, 20), ImGuiSetCond_FirstUseEver);
+            ImGui::ShowTestWindow(&show_test_window);
+        }
+
+        // Rendering
+        int display_w, display_h;
+        glfwGetFramebufferSize(main_window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui::Render();
+        glfwSwapBuffers(main_window);
     }
 
     if (events.ConsumerHandle != NULL)
     {
         WaitForSingleObject(events.ConsumerThread, INFINITE);
     }
+
+    ImGui_ImplGlfw_Shutdown();
+    glfwTerminate();
     return 0;
 }
 
