@@ -8,11 +8,12 @@ IF NOT DEFINED DevEnvDir (
     CALL "C:\Program Files (x86)\Microsoft Visual Studio %VSVERSION%\VC\vcvarsall.bat" x86_amd64
 )
 
+SET LIBDIR="%~dp0lib"
 SET OUTPUTDIR="%~dp0build"
-SET INCLUDES=-I..\include -I..\manifest -I..\src
+SET INCLUDES=-I..\include -I..\manifest -I..\src -I..\lib\%VSVERSION%
 SET DEFINES=/D _WIN32_WINNT=0x06000 /D UNICODE /D _UNICODE /D BUILD_STATIC /D _STDC_FORMAT_MACROS
 SET CPPFLAGS=%INCLUDES% /FC /nologo /W4 /WX /wd4505 /Zi /EHsc /Ob2it
-SET LIBRARIES=User32.lib Gdi32.lib Shell32.lib Advapi32.lib winmm.lib tdh.lib
+SET LIBRARIES=User32.lib Gdi32.lib Shell32.lib Advapi32.lib winmm.lib tdh.lib %LIBDIR%\%VSVERSION%\glfw3.lib
 SET LNKFLAGS=%LIBRARIES%
 
 IF NOT EXIST %OUTPUTDIR% mkdir %OUTPUTDIR%
