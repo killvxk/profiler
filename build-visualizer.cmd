@@ -10,7 +10,7 @@ IF NOT DEFINED DevEnvDir (
 
 SET OUTPUTDIR="%~dp0build"
 SET INCLUDES=-I..\include -I..\manifest -I..\src
-SET LIBRARIES=User32.lib Gdi32.lib Shell32.lib Advapi32.lib winmm.lib tdh.lib glfw3.lib
+SET LIBRARIES=User32.lib Gdi32.lib Shell32.lib Advapi32.lib winmm.lib tdh.lib glfw3dll.lib opengl32.lib
 
 SET DEFINES_COMMON=/D _WIN32_WINNT=0x0600 /D UNICODE /D _UNICODE /D _STDC_FORMAT_MACROS
 SET DEFINES_DEBUG=%DEFINES_COMMON% /D DEBUG /D _DEBUG
@@ -23,6 +23,9 @@ SET CPPFLAGS_RELEASE=%CPPFLAGS_COMMON% /Ob2it
 SET LNKFLAGS=%LIBRARIES%
 
 IF NOT EXIST %OUTPUTDIR% mkdir %OUTPUTDIR%
+
+@ECHO Copying GLFW3 support dll to "%OUTPUTDIR%...
+XCOPY .\lib\%VSVERSION%\glfw3.dll %OUTPUTDIR% /Y /Q
 
 IF [%1] NEQ [] (
     IF "%1" == "debug" (
