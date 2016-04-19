@@ -3,14 +3,6 @@
 ///////////////////////////////////////////////////////////////////////////80*/
 
 // TODO(rlk): Here are some notes on how things will have to be organized.
-// 1. Need to use the Image/Image_V1_Load MOF event to retrieve module base address, etc. required for symbol resolution.
-//    - This is per-process; Image_V1_Load includes the process ID also (Image_V0_Load does not include process ID.)
-// 2. Need to use the Process/Process_TypeGroup1 event to retrieve information about the running processes.
-//    - Mainly care about the PID and ImageName, but CommandLine is also available.
-// 3. Need to use the Thread/Thread_V2_TypeGroup1 event to retrieve information about the threads in each process.
-//    - The Win32StartAddr gives the entry point.
-// 4. Need to understand the types of queries that will be performed on this data and organize accordingly.
-//    - Processes and threads may start and stop during the trace.
 // 5. Know that task scheduler setup events may not be present - they could have been overwritten in the trace.
 //    - Need to be able to reconstruct this information from the state transition events.
 //    - Pool and source index. are available as part of the task ID.
@@ -92,7 +84,16 @@
 /// @summary Defines the data associated with a parsed command line.
 struct COMMAND_LINE
 {
-    TCHAR *TraceFile;
+    TCHAR        *TraceFile;
+};
+
+/// @summary Define the global user interface state.
+struct UI_STATE
+{
+    COMMAND_LINE *CommandLine;
+    GLFWwindow   *MainWindow;
+    bool          ShowConsole;
+    TCHAR         TracePath[32768];
 };
 
 /*///////////////
@@ -301,9 +302,9 @@ CreateConsoleAndRedirectStdio
     }
 }
 
-/// @summary 
-/// @param error
-/// @param description
+/// @summary Callback invoked by GLFW when an error occurs.
+/// @param error The GLFW error code.
+/// @param description A string description of the error.
 internal_function void
 GlfwErrorCallback
 (
@@ -311,8 +312,132 @@ GlfwErrorCallback
     char const *description
 )
 {
-    UNREFERENCED_PARAMETER(error);
-    UNREFERENCED_PARAMETER(description);
+    ConsoleError("ERROR: (GLFW 0x%08X) %s.\n", error, description); 
+}
+
+/// @summary Initialize the UI_STATE::TracePath field. The buffer is either initialized to empty or is initialized with an existing zero-terminated string.
+/// @param dst The destination UI_STATE instance.
+/// @param path A zero-terminated path string to copy, or NULL.
+internal_function void
+InitTracePath
+(
+    UI_STATE     *dst, 
+    TCHAR const *path
+)
+{
+    if (path == NULL)
+    {   // zero out the path buffer.
+        ZeroMemory(dst->TracePath, 32768 * sizeof(TCHAR));
+    }
+    else
+    {   // copy the path string into the buffer.
+        StringCchCopy(dst->TracePath, 32768, path);
+    }
+}
+
+/// @summary Display a system open file dialog to select a trace to load. Any existing trace is closed.
+/// @param ui The application user interface state data to update.
+/// @return true if a new trace file was successfully loaded.
+internal_function bool
+LoadTraceFile
+(
+    UI_STATE *ui
+)
+{
+    OPENFILENAME   ofn;
+    TCHAR  path[32768];
+    size_t len = 0;
+    
+    ZeroMemory(&ofn , sizeof(OPENFILENAME));
+    ZeroMemory(path , 32768 * sizeof(WCHAR));
+    ofn.lStructSize = sizeof(OPENFILENAME);
+    ofn.hwndOwner   = glfwGetWin32Window(ui->MainWindow);
+    ofn.lpstrFilter = _T("Trace Files (*.etl)\0*.etl\0All Files (*.*)\0*.*\0");
+    ofn.lpstrFile   = path;
+    ofn.nMaxFile    = 32767;
+    ofn.Flags       = OFN_EXPLORER | OFN_FILEMUSTEXIST;
+    ofn.lpstrDefExt = _T("etl");
+    
+    if (GetOpenFileName(&ofn))
+    {   // the new path is stored in 'path'.
+        // close any existing trace and use InitTracePath to copy the new path.
+        // use NewProfilerEvents(WIN32_PROFILER_EVENTS*, path) to load the new file.
+        // TODO(rlk): do this.
+        ConsoleOutput("STATUS: User selected file \"%s\".\n", path);
+    }
+    if (SUCCEEDED(StringCchLength(ui->TracePath, 32768, &len)))
+    {   // there may be an existing trace file loaded.
+        if (len > 0)
+        {   // close the existing trace file.
+            // TODO(rlk): do this.
+            ConsoleOutput("STATUS: Closing existing trace file \"%s\".\n", ui->TracePath);
+        }
+    }
+    return true;
+}
+
+/// @summary Construct and implement the logic for the primary application user interface.
+/// @param ui The application user interface state to update.
+internal_function void
+BuildImgui
+(
+    UI_STATE *ui
+)
+{
+    ImGuiIO                       &io  = ImGui::GetIO();
+    ImVec2           main_window_size  = io.DisplaySize;
+    bool             main_window_open  = true;
+    ImGuiWindowFlags main_window_flags = 
+        ImGuiWindowFlags_NoTitleBar | 
+        ImGuiWindowFlags_NoResize   | 
+        ImGuiWindowFlags_NoMove     | 
+        ImGuiWindowFlags_NoCollapse | 
+        ImGuiWindowFlags_MenuBar;
+    
+    bool exit_application = false;
+    bool load_trace_file = false;
+    bool show_console = false;
+
+    // create the main IMGUI window within the client rect of the GLFW window.
+    if (ImGui::Begin("TopLevel", &main_window_open, main_window_flags))
+    {   // create the main menu:
+        if (ImGui::BeginMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                ImGui::MenuItem("Load Trace...", NULL, &load_trace_file);
+                ImGui::MenuItem("Exit", NULL, &exit_application);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View"))
+            {
+                ImGui::MenuItem("Console", NULL, &show_console);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+        ImGui::SetWindowPos (ImVec2(0, 0));
+        ImGui::SetWindowSize(io.DisplaySize);
+        ImGui::End();
+    }
+
+    if (show_console && !ui->ShowConsole)
+    {   // display the console output. an application is only allowed one 
+        // console, so if the user closes it, the application exits.
+        CreateConsoleAndRedirectStdio();
+        ui->ShowConsole = true;
+    }
+    if (load_trace_file)
+    {
+        if (LoadTraceFile(ui))
+        {
+            // TODO(rlk): a new trace file was loaded. re-initialize the UI.
+        }
+    }
+    if (exit_application)
+    {   // close the main window to trigger application shutdown.
+        PostMessage(glfwGetWin32Window(ui->MainWindow), WM_CLOSE, 0, 0);
+    }
 }
 
 /*////////////////////////
@@ -335,7 +460,8 @@ WinMain
 {
     WIN32_PROFILER_EVENTS events;
     COMMAND_LINE            argv;
-    GLFWwindow     *main_window = NULL;
+    GLFWwindow      *main_window = NULL;
+    UI_STATE                  ui = {};
 
     UNREFERENCED_PARAMETER(this_instance);
     UNREFERENCED_PARAMETER(prev_instance);
@@ -347,6 +473,7 @@ WinMain
         DebugPrintf(_T("ERROR: Unable to parse the command line.\n"));
         return 1;
     }
+
     glfwSetErrorCallback(GlfwErrorCallback);
     if (!glfwInit())
     {   // GlfwErrorCallback will have printed additional error information.
@@ -357,19 +484,14 @@ WinMain
         return 1;
     }
     glfwMakeContextCurrent(main_window);
-    CreateConsoleAndRedirectStdio();
     ImGui_ImplGlfw_Init(main_window, true);
 
-    // test test load a trace file
-    if (argv.TraceFile != NULL)
-    {
-        NewProfilerEvents(&events, argv.TraceFile);
-    }
-
     // run the main thread loop.
-    bool show_test_window = true;
-    bool show_another_window = false;
     ImVec4 clear_color = ImColor(114, 144, 154);
+    ui.CommandLine = &argv;
+    ui.MainWindow  = main_window;
+    ui.ShowConsole = false;
+    InitTracePath(&ui, argv.TraceFile);
 
     // Main loop
     while (!glfwWindowShouldClose(main_window))
@@ -377,35 +499,10 @@ WinMain
         glfwPollEvents();
         ImGui_ImplGlfw_NewFrame();
 
-        // 1. Show a simple window
-        // Tip: if we don't call ImGui::Begin()/ImGui::End() the widgets appears in a window automatically called "Debug"
-        {
-            static float f = 0.0f;
-            ImGui::Text("Hello, world!");
-            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);
-            ImGui::ColorEdit3("clear color", (float*)&clear_color);
-            if (ImGui::Button("Test Window")) show_test_window ^= 1;
-            if (ImGui::Button("Another Window")) show_another_window ^= 1;
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-        }
+        // construct the user interface.
+        BuildImgui(&ui);
 
-        // 2. Show another simple window, this time using an explicit Begin/End pair
-        if (show_another_window)
-        {
-            ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiSetCond_FirstUseEver);
-            ImGui::Begin("Another Window", &show_another_window);
-            ImGui::Text("Hello");
-            ImGui::End();
-        }
-
-        // 3. Show the ImGui test window. Most of the sample code is in ImGui::ShowTestWindow()
-        if (show_test_window)
-        {
-            ImGui::SetNextWindowPos(ImVec2(650, 20), ImGuiSetCond_FirstUseEver);
-            ImGui::ShowTestWindow(&show_test_window);
-        }
-
-        // Rendering
+        // convert the user interface to command buffer form and render.
         int display_w, display_h;
         glfwGetFramebufferSize(main_window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
