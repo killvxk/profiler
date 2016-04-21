@@ -81,19 +81,30 @@
 /*//////////////////
 //   Data Types   //
 //////////////////*/
+/// @summary Define identifiers for the possible top-level user interface states.
+enum UI_STATE_ID : int
+{
+    UI_STATE_ID_NO_TRACE_LOADED   = 0, 
+    UI_STATE_ID_TRACE_LOADING     = 1,
+    UI_STATE_ID_TRACE_LOADED      = 2, 
+    UI_STATE_ID_TRACE_LOAD_ERROR  = 3,
+};
+
 /// @summary Defines the data associated with a parsed command line.
 struct COMMAND_LINE
 {
-    TCHAR        *TraceFile;
+    TCHAR                 *TraceFile;
 };
 
 /// @summary Define the global user interface state.
 struct UI_STATE
 {
-    COMMAND_LINE *CommandLine;
-    GLFWwindow   *MainWindow;
-    bool          ShowConsole;
-    TCHAR         TracePath[32768];
+    int                    TopLevelState;
+    WIN32_PROFILER_EVENTS *EventData;
+    COMMAND_LINE          *CommandLine;
+    GLFWwindow            *MainWindow;
+    bool                   ShowConsole;
+    TCHAR                  TracePath[32768];
 };
 
 /*///////////////
@@ -335,19 +346,80 @@ InitTracePath
     }
 }
 
-/// @summary Display a system open file dialog to select a trace to load. Any existing trace is closed.
+/// @summary Allocate and initialize a new application state instance. No trace file is loaded, and the command line trace path is not copied into the UI_STATE.
+/// @param command_line Command-line arguments used to launch the application.
+/// @param main_window The main application window.
+/// @return A pointer to the new UI_STATE instance, or NULL.
+internal_function UI_STATE*
+NewUIState
+(
+    COMMAND_LINE *command_line, 
+    GLFWwindow    *main_window
+)
+{   assert(command_line != NULL);
+    assert(main_window  != NULL);
+
+    UI_STATE *ui = NULL;
+    if ((ui = (UI_STATE*) malloc(sizeof(UI_STATE))) == NULL)
+    {
+        ConsoleError("ERROR: Insufficient memory to create new UI_STATE.\n");
+        return NULL;
+    }
+    ZeroMemory(ui, sizeof(UI_STATE));
+    ui->TopLevelState   = UI_STATE_ID_NO_TRACE_LOADED;
+    ui->CommandLine     = command_line;
+    ui->MainWindow      = main_window;
+    ui->ShowConsole     = false;
+    return ui;
+}
+
+/// @summary Allocate and initialize a new application state instance, copying user interface state from an existing instance.
+/// @param existing The existing user interface state to copy.
+/// @return A pointer to the new UI_STATE instance, or NULL.
+internal_function UI_STATE*
+NewUIState
+(
+    UI_STATE *existing
+)
+{   assert(existing != NULL);
+    UI_STATE *ui = NewUIState(existing->CommandLine, existing->MainWindow);
+    if (ui)
+    {   // copy over actual user interface state values, but not trace data.
+        ui->ShowConsole = existing->ShowConsole;
+        // TODO(rlk): copy other relevant fields...
+    }
+    return ui;
+}
+
+/// @summary Free resources associated with an application state instance.
+/// @param ui The user interface state data to free.
+internal_function void
+DeleteUIState
+(
+    UI_STATE *ui
+)
+{
+    if (ui != NULL)
+    {
+        if (ui->EventData != NULL)
+        {   // this also sets ui->EventData to NULL.
+            DeleteProfilerEvents(&ui->EventData);
+        }
+        free(ui);
+    }
+}
+
+/// @summary Display a system open file dialog to select a trace to load. The trace path is copied into the UI_STATE::TracePath field.
 /// @param ui The application user interface state data to update.
-/// @return true if a new trace file was successfully loaded.
+/// @return true if a trace file was selected.
 internal_function bool
-LoadTraceFile
+SelectTraceFile
 (
     UI_STATE *ui
 )
 {
     OPENFILENAME   ofn;
     TCHAR  path[32768];
-    size_t len = 0;
-    
     ZeroMemory(&ofn , sizeof(OPENFILENAME));
     ZeroMemory(path , 32768 * sizeof(WCHAR));
     ofn.lStructSize = sizeof(OPENFILENAME);
@@ -360,20 +432,13 @@ LoadTraceFile
     
     if (GetOpenFileName(&ofn))
     {   // the new path is stored in 'path'.
-        // close any existing trace and use InitTracePath to copy the new path.
-        // use NewProfilerEvents(WIN32_PROFILER_EVENTS*, path) to load the new file.
-        // TODO(rlk): do this.
-        ConsoleOutput("STATUS: User selected file \"%s\".\n", path);
+        InitTracePath(ui, path);
+        return true;
     }
-    if (SUCCEEDED(StringCchLength(ui->TracePath, 32768, &len)))
-    {   // there may be an existing trace file loaded.
-        if (len > 0)
-        {   // close the existing trace file.
-            // TODO(rlk): do this.
-            ConsoleOutput("STATUS: Closing existing trace file \"%s\".\n", ui->TracePath);
-        }
+    else
+    {   // the user cancelled, or an error occurred.
+        return false;
     }
-    return true;
 }
 
 /// @summary Construct and implement the logic for the primary application user interface.
@@ -381,7 +446,7 @@ LoadTraceFile
 internal_function void
 BuildImgui
 (
-    UI_STATE *ui
+    UI_STATE *&ui
 )
 {
     ImGuiIO                       &io  = ImGui::GetIO();
@@ -416,8 +481,18 @@ BuildImgui
             }
             ImGui::EndMenuBar();
         }
+        // ensure that the main window takes up the entire display area.
         ImGui::SetWindowPos (ImVec2(0, 0));
         ImGui::SetWindowSize(io.DisplaySize);
+        // render different views based on whether or not a trace is loaded.
+        switch (ui->TopLevelState)
+        {
+            case UI_STATE_ID_NO_TRACE_LOADED:  break;
+            case UI_STATE_ID_TRACE_LOADING:    break;
+            case UI_STATE_ID_TRACE_LOADED:     break;
+            case UI_STATE_ID_TRACE_LOAD_ERROR: break;
+            default: break; /* serious error */
+        }
         ImGui::End();
     }
 
@@ -429,9 +504,18 @@ BuildImgui
     }
     if (load_trace_file)
     {
-        if (LoadTraceFile(ui))
+        UI_STATE *new_ui = NewUIState(ui);
+        if (SelectTraceFile(new_ui))
         {
             // TODO(rlk): a new trace file was loaded. re-initialize the UI.
+            DeleteUIState(ui); ui = new_ui;
+            ui->TopLevelState = UI_STATE_ID_TRACE_LOADING;
+            ui->EventData = NewProfilerEvents(new_ui->TracePath);
+            // ...
+        }
+        else
+        {   // the user cancelled.
+            DeleteUIState(new_ui);
         }
     }
     if (exit_application)
@@ -458,10 +542,9 @@ WinMain
     int        show_command
 )
 {
-    WIN32_PROFILER_EVENTS events;
-    COMMAND_LINE            argv;
-    GLFWwindow      *main_window = NULL;
-    UI_STATE                  ui = {};
+    COMMAND_LINE         argv = {};
+    GLFWwindow   *main_window = NULL;
+    UI_STATE              *ui = NULL;
 
     UNREFERENCED_PARAMETER(this_instance);
     UNREFERENCED_PARAMETER(prev_instance);
@@ -488,10 +571,12 @@ WinMain
 
     // run the main thread loop.
     ImVec4 clear_color = ImColor(114, 144, 154);
-    ui.CommandLine = &argv;
-    ui.MainWindow  = main_window;
-    ui.ShowConsole = false;
-    InitTracePath(&ui, argv.TraceFile);
+    if ((ui = NewUIState(&argv, main_window)) == NULL)
+    {
+        DebugPrintf(_T("ERROR: Unable to initialize application user interface state.\n"));
+        return 1;
+    }
+    InitTracePath(ui, argv.TraceFile);
 
     // Main loop
     while (!glfwWindowShouldClose(main_window))
@@ -500,7 +585,8 @@ WinMain
         ImGui_ImplGlfw_NewFrame();
 
         // construct the user interface.
-        BuildImgui(&ui);
+        // this call may upadate the ui pointer.
+        BuildImgui(ui);
 
         // convert the user interface to command buffer form and render.
         int display_w, display_h;
@@ -512,12 +598,8 @@ WinMain
         glfwSwapBuffers(main_window);
     }
 
-    if (events.ConsumerHandle != NULL)
-    {
-        WaitForSingleObject(events.ConsumerThread, INFINITE);
-    }
-
     ImGui_ImplGlfw_Shutdown();
+    DeleteUIState(ui);
     glfwTerminate();
     return 0;
 }
