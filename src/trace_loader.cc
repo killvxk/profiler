@@ -1181,15 +1181,15 @@ EventConsumerThreadMain
 //   Public Functions   //
 ////////////////////////*/
 /// @summary Allocate resources for a new WIN32_PROFILER_EVENTS container, open a trace session and consume the event data.
-/// @param ev The profiler events container to initialize.
 /// @param trace_file A NULL-terminated string specifying the path of the file to load.
-public_function int
+/// @return The profiler events container, or NULL.
+public_function WIN32_PROFILER_EVENTS*
 NewProfilerEvents
 (
-    WIN32_PROFILER_EVENTS         *ev, 
     TCHAR const           *trace_file
 )
-{   
+{   // allocate using new to ensure that std::vector constructors run.
+    WIN32_PROFILER_EVENTS   *ev = new WIN32_PROFILER_EVENTS();
     TRACEHANDLE           trace = INVALID_PROCESSTRACE_HANDLE;
     EVENT_TRACE_LOGFILE logfile = {};
     HANDLE               thread = NULL;
@@ -1213,7 +1213,8 @@ NewProfilerEvents
     {   // if the trace cannot be opened, there's no point in continuing.
         ConsoleError("ERROR (%S): Unable to open the trace session (%08X).\n", __FUNCTION__, GetLastError());
         CloseHandle(ev->ConsumerLaunch); ev->ConsumerLaunch = NULL;
-        return -1;
+        delete ev;
+        return NULL;
     }
 
     // start a background thread to receive events read from the trace file.
@@ -1222,7 +1223,8 @@ NewProfilerEvents
         ConsoleError("ERROR (%S): Unable to start event consumer thread (errno = %d).\n", __FUNCTION__, errno);
         CloseHandle(ev->ConsumerLaunch); ev->ConsumerLaunch = NULL;
         CloseTrace(trace);
-        return -1;
+        delete ev;
+        return NULL;
     }
 
     // TODO(rlk): might want to move to a memory arena system based around VirtualAlloc.
@@ -1242,6 +1244,44 @@ NewProfilerEvents
 
     // start populating our data structures with event data from the trace file.
     SetEvent(ev->ConsumerLaunch);
-    return 0;
+    return ev;
+}
+
+/// @summary Free all resources associated with a profiler event container.
+/// @param events The profiler event container to delete, returned by NewProfilerEvents().
+public_function void
+DeleteProfilerEvents
+(
+    WIN32_PROFILER_EVENTS **events
+)
+{
+    if (events != NULL)
+    {
+        WIN32_PROFILER_EVENTS *ev = *events;
+        if (ev->ConsumerThread != NULL)
+        {   // block the calling thread indefinitely until all events have been consumed.
+            // typically, the thread will have already exited by the time this is called.
+            WaitForSingleObject(ev->ConsumerThread, INFINITE);
+            CloseHandle(ev->ConsumerThread);
+            ev->ConsumerThread = NULL;
+        }
+        if (ev->ConsumerLaunch != NULL)
+        {   // close the manual-reset event used to launch the consumer thread. nothing is waiting on it now.
+            CloseHandle(ev->ConsumerLaunch);
+            ev->ConsumerLaunch = NULL;
+        }
+        if (ev->ConsumerHandle != INVALID_PROCESSTRACE_HANDLE)
+        {   // close the trace handle. typically, this handle will already be closed by the time this is called.
+            CloseTrace(ev->ConsumerHandle);
+            ev->ConsumerHandle = INVALID_PROCESSTRACE_HANDLE;
+        }
+        if (ev->EventBuffer != NULL)
+        {   // free the memory allocated for event parsing.
+            free(ev->EventBuffer);
+            ev->EventBuffer = NULL;
+            ev->EventBufferSize = 0;
+        }
+        delete ev; *events = NULL;
+    }
 }
 
